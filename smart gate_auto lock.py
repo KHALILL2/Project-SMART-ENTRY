@@ -13,6 +13,17 @@ import keyring
 from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from logging.handlers import RotatingFileHandler
+
+# Add nfcpy module path
+sys.path.insert(0, '/home/pi/Desktop/nfcpy/src')
+try:
+    import nfc
+    from nfc.clf import RemoteTarget
+    print("nfcpy module loaded successfully!")
+except ImportError as e:
+    print(f"Failed to import nfc: {e}")
+    raise  # Raise to debug import issues
+
 try:
     import RPi.GPIO as GPIO
 except (ImportError, RuntimeError):
@@ -31,49 +42,6 @@ except (ImportError, RuntimeError):
         def cleanup(self, pin=None):
             print(f"MockGPIO: Cleanup pin {pin if pin else 'all'}")
     GPIO = MockGPIO()
-
-try:
-    import nfc
-    from nfc.clf import RemoteTarget
-except ImportError:
-    print("WARNING: nfc library not found. Using mock NFC.")
-    class MockRemoteTarget:
-        @property
-        def sdd_res(self):
-            return b'01234567'
-    class MockNFCReader:
-        def __init__(self, path):
-            print(f"MockNFC: Initialized with path {path}")
-            self._target_present = False
-            self._activate_target = None
-        def sense(self, target_type, iterations=1, interval=0.1):
-            print("MockNFC: Sensing for target...")
-            if time.time() % 10 < 5:
-                print("MockNFC: Target found")
-                self._target_present = True
-                return MockRemoteTarget()
-            else:
-                print("MockNFC: No target found")
-                self._target_present = False
-                return None
-        def close(self):
-            print("MockNFC: Closed")
-        def activate(self, clf, target):
-            print("MockNFC: Activating target")
-            if self._target_present:
-                class MockTag:
-                    identifier = b'\x04\x01\x02\x03\x04\x05\x06'
-                    def __str__(self):
-                        return f"MockTag ID: {self.identifier.hex()}"
-                self._activate_target = MockTag()
-                return self._activate_target
-            return None
-    class MockNFC:
-        ContactlessFrontend = MockNFCReader
-        tag = type('MockTagModule', (), {'activate': MockNFCReader.activate})()
-        clf = type('MockClfModule', (), {'RemoteTarget': MockRemoteTarget})()
-    nfc = MockNFC()
-    RemoteTarget = MockNFC.clf.RemoteTarget
 
 from tkinter import Tk, Label, Button, messagebox, Entry, Toplevel, Text, END
 from tkinter import ttk
@@ -485,7 +453,7 @@ class HardwareController:
         base_delay = 2
         for attempt in range(1, self.config.NFC_MAX_ATTEMPTS + 1):
             try:
-                clf = nfc.ContactlessFrontend('usb')
+                clf = nfc.ContactlessFrontend('i2c:1:0x24')  # PN532 in I2C mode
                 if clf:
                     self.logger.log_info(f"NFC reader initialized on attempt {attempt}")
                     return clf
@@ -1231,7 +1199,7 @@ class NFCAccessControlApp:
             else:
                 access_status = AccessStatus.DENIED
                 details = f"Access denied. Card {card_id} not found or invalid"
-                self.logger.log_warning(details)
+                self.logger.log_info(details)
                 self.hardware.buzz(0.3)
         except Exception as e:
             access_status = AccessStatus.DENIED
