@@ -14,7 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from logging.handlers import RotatingFileHandler
 
-# Add nfcpy and ndeflib module paths
+# Add nfcpy and ndeflib module paths and disable USB driver
+os.environ['NFCPY_USB_DRIVER'] = ''  # Disable USB drivers to bypass usb1 import
 sys.path.insert(0, '/home/pi/Desktop/nfcpy/src')
 sys.path.insert(0, '/home/pi/Desktop/ndeflib/src')
 try:
