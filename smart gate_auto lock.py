@@ -439,7 +439,7 @@ class HardwareController:
         self._last_health_check = None
         self._error_count = 0
         self._max_retries = 3
-        self._lock_state = False
+        self._lock_state = True  # True = locked, False = unlocked
         try:
             self._initialize_hardware()
         except Exception as e:
@@ -467,7 +467,6 @@ class HardwareController:
                 self._nfc_reader = self._get_nfc_reader_with_retry()
                 if not self._nfc_reader:
                     raise RuntimeError("Failed to initialize NFC reader")
-                self._lock_state = True
                 self._is_initialized = True
                 self.logger.log_audit("hardware_initialized", {
                     "servo_pin": self.config.SERVO_PIN,
@@ -509,7 +508,7 @@ class HardwareController:
                     self._nfc_reader = None
                 GPIO.cleanup()
                 self._is_initialized = False
-                self._lock_state = False
+                self._lock_state = True  # Reset to locked on cleanup
                 self.logger.log_info("Hardware cleanup successful")
             except Exception as e:
                 self.logger.log_error(e, "Hardware cleanup failed")
