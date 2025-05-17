@@ -14,14 +14,16 @@ from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from logging.handlers import RotatingFileHandler
 
-# Add nfcpy module path
+# Add nfcpy and ndeflib module paths
 sys.path.insert(0, '/home/pi/Desktop/nfcpy/src')
+sys.path.insert(0, '/home/pi/Desktop/ndeflib/src')
 try:
     import nfc
     from nfc.clf import RemoteTarget
-    print("nfcpy module loaded successfully!")
+    import ndef
+    print("nfcpy and ndeflib modules loaded successfully!")
 except ImportError as e:
-    print(f"Failed to import nfc: {e}")
+    print(f"Failed to import modules: {e}")
     raise  # Raise to debug import issues
 
 try:
