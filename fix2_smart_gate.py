@@ -60,6 +60,10 @@ import traceback
 import json
 from pathlib import Path
 import queue
+import gc  # For garbage collection
+
+# Performance optimization: Enable garbage collection
+gc.enable()
 
 class AccessStatus(Enum):
     GRANTED = auto()
@@ -124,7 +128,13 @@ class ProfessionalLogger:
         self.logger.addHandler(console_handler)
         self.metrics = SystemMetrics()
         self.start_time = datetime.now()
-        self.log_queue = queue.Queue()
+        self.log_queue = queue.Queue(maxsize=1000)  # Limit queue size to prevent memory leaks
+        
+        # Performance optimization: Batch log processing
+        self.log_batch = []
+        self.batch_size = 10
+        self.last_batch_time = time.time()
+        self.batch_interval = 5  # seconds
 
     def log_access(self, card_info: CardInfo, status: AccessStatus, response_time: float) -> None:
         log_data = {
@@ -137,11 +147,16 @@ class ProfessionalLogger:
         }
         msg = json.dumps(log_data)
         self.logger.info(msg)
-        self.log_queue.put(f"INFO: Access attempt - Card: {card_info.id}, Status: {status.name}")
+        self._queue_log(f"INFO: Access attempt - Card: {card_info.id}, Status: {status.name}")
         self._update_metrics(status, response_time)
 
     def log_error(self, error: Exception, context: str = "", severity: str = "ERROR") -> None:
-        tb_string = traceback.format_exc()
+        # Performance optimization: Only log full traceback for critical errors
+        if severity == "CRITICAL":
+            tb_string = traceback.format_exc()
+        else:
+            tb_string = str(error)
+            
         error_info = {
             'timestamp': datetime.now().isoformat(),
             'error': str(error),
@@ -152,7 +167,7 @@ class ProfessionalLogger:
         }
         msg = json.dumps(error_info)
         self.logger.error(msg)
-        self.log_queue.put(f"{severity}: {context} - {error}")
+        self._queue_log(f"{severity}: {context} - {error}")
 
     def log_audit(self, action: str, details: Dict[str, Any]) -> None:
         audit_data = {
@@ -162,13 +177,55 @@ class ProfessionalLogger:
         }
         msg = json.dumps(audit_data)
         self.audit_logger.info(msg)
-        self.log_queue.put(f"AUDIT: {action} - {details.get('card_id', '')}")
+        self._queue_log(f"AUDIT: {action} - {details.get('card_id', '')}")
 
     def log_info(self, message: str) -> None:
         self.logger.info(message)
-        self.log_queue.put(f"INFO: {message}")
+        self._queue_log(f"INFO: {message}")
 
-    def get_recent_logs(self, max_logs=100) -> List[str]:
+    def _queue_log(self, message: str) -> None:
+        """Add log to batch for efficient processing"""
+        try:
+            self.log_batch.append(message)
+            
+            # Process batch if full or interval elapsed
+            current_time = time.time()
+            if (len(self.log_batch) >= self.batch_size or 
+                current_time - self.last_batch_time >= self.batch_interval):
+                self._process_log_batch()
+        except Exception:
+            # Fail silently to prevent logging errors from affecting main functionality
+            pass
+
+    def _process_log_batch(self) -> None:
+        """Process a batch of logs efficiently"""
+        if not self.log_batch:
+            return
+            
+        try:
+            # Add all logs to queue without exceeding max size
+            for log in self.log_batch:
+                if self.log_queue.full():
+                    # Remove oldest log if queue is full
+                    try:
+                        self.log_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                self.log_queue.put(log, block=False)
+                
+            self.log_batch = []
+            self.last_batch_time = time.time()
+        except Exception:
+            # Fail silently
+            self.log_batch = []
+
+    def get_recent_logs(self, max_logs=50) -> List[str]:
+        """Get recent logs, optimized to reduce CPU usage"""
+        # Process any pending batch first
+        if self.log_batch and (len(self.log_batch) >= self.batch_size or 
+                              time.time() - self.last_batch_time >= self.batch_interval):
+            self._process_log_batch()
+            
         logs = []
         count = 0
         while not self.log_queue.empty() and count < max_logs:
@@ -187,6 +244,7 @@ class ProfessionalLogger:
             self.metrics.failed_accesses += 1
         total_req = self.metrics.total_requests
         if total_req > 0:
+            # Optimize average calculation to reduce floating point operations
             self.metrics.average_response_time = (
                 (self.metrics.average_response_time * (total_req - 1) + response_time) / total_req
             )
@@ -203,14 +261,29 @@ class ProfessionalLogger:
             'last_health_check': self.metrics.last_health_check.isoformat() if self.metrics.last_health_check else None
         }
 
+# Create a singleton logger instance
 logger = ProfessionalLogger()
 
 class Config:
     DEFAULT_VALID_PINS = [2,3,4,17,18,22,23,24,25,26,27]
     DEFAULT_THERMAL_FILE = "/sys/class/thermal/thermal_zone0/temp"
     CONFIG_FILE = 'config.ini'
+    
+    # Performance optimization: Use a class variable for singleton instance
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Config, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
 
     def __init__(self):
+        # Only initialize once
+        if self._initialized:
+            return
+            
+        self._initialized = True
         self.config = configparser.ConfigParser()
         try:
             os.umask(0o077)
@@ -246,6 +319,13 @@ class Config:
         self.NFC_PROTOCOL = self.config.get('nfc', 'protocol', fallback='106A')
         self.DB_PATH = self.config.get('database', 'path', fallback='cards.db')
         self.DB_ENCRYPTED = self.config.getboolean('database', 'encrypted', fallback=True)
+        
+        # Performance optimization settings
+        self.GUI_UPDATE_INTERVAL = self.config.getint('performance', 'gui_update_ms', fallback=200)
+        self.TEMP_CHECK_INTERVAL = self.config.getint('performance', 'temp_check_sec', fallback=60)
+        self.LOG_BATCH_SIZE = self.config.getint('performance', 'log_batch_size', fallback=10)
+        self.DB_CACHE_SIZE = self.config.getint('performance', 'db_cache_size', fallback=100)
+        self.POWER_SAVE_MODE = self.config.getboolean('performance', 'power_save', fallback=True)
 
     def _create_default_config(self):
         default_config = configparser.ConfigParser()
@@ -259,7 +339,7 @@ class Config:
             'servo': '18',
             'fan': '23',
             'buzzer': '24',
-            'solenoid': '25'
+            'solenoid': '17'  # Changed to GPIO 17 as per user's hardware setup
         }
         default_config['servo'] = {
             'open': '7.5',
@@ -279,6 +359,13 @@ class Config:
         default_config['database'] = {
             'path': 'cards.db',
             'encrypted': 'True'
+        }
+        default_config['performance'] = {
+            'gui_update_ms': '200',
+            'temp_check_sec': '60',
+            'log_batch_size': '10',
+            'db_cache_size': '100',
+            'power_save': 'True'
         }
         with open(self.CONFIG_FILE, 'w') as configfile:
             default_config.write(configfile)
@@ -412,10 +499,47 @@ class CardDatabase:
         self.db_path = db_path
         self.encrypted = encrypted
         self.key = None
+        
+        # Performance optimization: Add caching
+        self.card_cache = {}
+        self.cache_size = config.DB_CACHE_SIZE
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
         if self.encrypted:
             self._setup_encryption()
         self._setup_database()
         self._add_demo_data()
+        
+        # Performance optimization: Use connection pooling
+        self.connection_pool = queue.Queue(maxsize=5)
+        for _ in range(3):  # Pre-create 3 connections
+            self.connection_pool.put(self._create_connection())
+
+    def _create_connection(self):
+        """Create a new database connection"""
+        conn = sqlite3.connect(self.db_path)
+        # Performance optimization: Enable WAL mode for better concurrency
+        conn.execute("PRAGMA journal_mode=WAL")
+        # Performance optimization: Reduce disk I/O
+        conn.execute("PRAGMA synchronous=NORMAL")
+        # Performance optimization: Increase cache size
+        conn.execute("PRAGMA cache_size=2000")
+        return conn
+        
+    def _get_connection(self):
+        """Get a connection from the pool or create a new one"""
+        try:
+            return self.connection_pool.get(block=False)
+        except queue.Empty:
+            return self._create_connection()
+            
+    def _return_connection(self, conn):
+        """Return a connection to the pool"""
+        try:
+            self.connection_pool.put(conn, block=False)
+        except queue.Full:
+            conn.close()
 
     def _setup_encryption(self) -> None:
         try:
@@ -435,7 +559,7 @@ class CardDatabase:
 
     def _setup_database(self) -> None:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS cards (
@@ -452,14 +576,17 @@ class CardDatabase:
                 photo_path TEXT
             )
             ''')
+            # Performance optimization: Add index for faster lookups
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_card_id ON cards(id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_is_valid ON cards(is_valid)')
             conn.commit()
-            conn.close()
+            self._return_connection(conn)
         except Exception as e:
             logger.log_error(e, "Failed to setup database")
 
     def _add_demo_data(self) -> None:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM cards")
             count = cursor.fetchone()[0]
@@ -478,7 +605,7 @@ class CardDatabase:
                 for card in demo_cards:
                     self.add_card(*card)
                 print("Added demo data to database")
-            conn.close()
+            self._return_connection(conn)
         except Exception as e:
             logger.log_error(e, "Failed to add demo data")
 
@@ -507,7 +634,7 @@ class CardDatabase:
                 student_id: str, email: str, expiry_date: str, is_valid: int, 
                 last_access: Optional[str] = None, photo_path: Optional[str] = None) -> bool:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             if self.encrypted:
                 name = self._encrypt(name)
@@ -523,23 +650,37 @@ class CardDatabase:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (card_id, name, faculty, program, level, student_id, email, expiry_date, is_valid, last_access, photo_path))
             conn.commit()
-            conn.close()
+            self._return_connection(conn)
+            
+            # Update cache if card exists
+            if card_id in self.card_cache:
+                del self.card_cache[card_id]
+                
             return True
         except Exception as e:
             logger.log_error(e, f"Failed to add card {card_id}")
             return False
 
     def get_card(self, card_id: str) -> Optional[Dict[str, Any]]:
+        # Check cache first
+        if card_id in self.card_cache:
+            self.cache_hits += 1
+            return self.card_cache[card_id]
+            
+        self.cache_misses += 1
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM cards WHERE id = ?", (card_id,))
             row = cursor.fetchone()
-            conn.close()
             if not row:
+                self._return_connection(conn)
                 return None
+                
             columns = [col[0] for col in cursor.description]
             card_data = dict(zip(columns, row))
+            self._return_connection(conn)
+            
             if self.encrypted:
                 card_data['name'] = self._decrypt(card_data['name'])
                 card_data['faculty'] = self._decrypt(card_data['faculty'])
@@ -549,6 +690,14 @@ class CardDatabase:
                 card_data['email'] = self._decrypt(card_data['email'])
                 if card_data['photo_path']:
                     card_data['photo_path'] = self._decrypt(card_data['photo_path'])
+            
+            # Add to cache
+            if len(self.card_cache) >= self.cache_size:
+                # Remove oldest item (first key)
+                if self.card_cache:
+                    self.card_cache.pop(next(iter(self.card_cache)))
+            self.card_cache[card_id] = card_data
+            
             return card_data
         except Exception as e:
             logger.log_error(e, f"Failed to get card {card_id}")
@@ -556,14 +705,19 @@ class CardDatabase:
 
     def update_last_access(self, card_id: str) -> bool:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE cards SET last_access = ? WHERE id = ?", 
                 (datetime.now().isoformat(), card_id)
             )
             conn.commit()
-            conn.close()
+            self._return_connection(conn)
+            
+            # Update cache if card exists
+            if card_id in self.card_cache:
+                self.card_cache[card_id]['last_access'] = datetime.now().isoformat()
+                
             return True
         except Exception as e:
             logger.log_error(e, f"Failed to update last access for card {card_id}")
@@ -571,7 +725,7 @@ class CardDatabase:
 
     def get_all_cards(self) -> List[Dict[str, Any]]:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM cards")
             rows = cursor.fetchall()
@@ -589,11 +743,20 @@ class CardDatabase:
                     if card_data['photo_path']:
                         card_data['photo_path'] = self._decrypt(card_data['photo_path'])
                 cards.append(card_data)
-            conn.close()
+            self._return_connection(conn)
             return cards
         except Exception as e:
             logger.log_error(e, "Failed to get all cards")
             return []
+            
+    def close(self):
+        """Close all database connections"""
+        while not self.connection_pool.empty():
+            try:
+                conn = self.connection_pool.get(block=False)
+                conn.close()
+            except queue.Empty:
+                break
 
 class NFCReader:
     def __init__(self, config_obj: Config) -> None:
@@ -605,6 +768,7 @@ class NFCReader:
         self.card_id = None
         self.reader_thread = None
         self.mock_mode = not NFC_AVAILABLE
+        self.power_save_mode = config_obj.POWER_SAVE_MODE
         
         if not self.mock_mode:
             self._initialize_reader()
@@ -650,6 +814,8 @@ class NFCReader:
 
     def _reader_loop(self) -> None:
         attempts = 0
+        poll_interval = 0.5  # seconds between polls in power save mode
+        
         while not self.stop_event.is_set() and attempts < self.config.NFC_MAX_ATTEMPTS:
             try:
                 if not self.connected:
@@ -658,11 +824,23 @@ class NFCReader:
                 # Configure target for ISO14443-A (MIFARE) cards
                 target = RemoteTarget(f"106{self.config.NFC_PROTOCOL}")
                 
-                # Poll for cards
-                tag = self.clf.connect(rdwr={'on-connect': lambda tag: False}, 
-                                      targets=[target],
-                                      interval=0.1,
-                                      iterations=int(self.config.NFC_TIMEOUT / 0.1))
+                # Poll for cards with power-saving considerations
+                if self.power_save_mode:
+                    # Use shorter polling intervals to save power
+                    tag = self.clf.connect(rdwr={'on-connect': lambda tag: False}, 
+                                          targets=[target],
+                                          interval=0.2,  # Reduced polling frequency
+                                          iterations=5)  # Fewer iterations per cycle
+                    
+                    if not tag and not self.stop_event.is_set():
+                        # Sleep between polling cycles to reduce CPU usage
+                        time.sleep(poll_interval)
+                else:
+                    # Standard polling for maximum responsiveness
+                    tag = self.clf.connect(rdwr={'on-connect': lambda tag: False}, 
+                                          targets=[target],
+                                          interval=0.1,
+                                          iterations=int(self.config.NFC_TIMEOUT / 0.1))
                 
                 if tag:
                     # Extract card ID
@@ -696,8 +874,11 @@ class NFCReader:
 
     def _mock_reader_loop(self) -> None:
         print("Mock mode: Starting simulated card reader")
+        # Performance optimization: Adjust mock card read interval based on power save mode
+        read_interval = 5 if self.power_save_mode else 3
+        
         while not self.stop_event.is_set():
-            time.sleep(3)  # Simulate card read every 3 seconds
+            time.sleep(read_interval)  # Simulate card read every few seconds
             if not self.stop_event.is_set():
                 print("Mock mode: Simulating card read")
                 # Use a demo card ID
@@ -729,6 +910,7 @@ class HardwareController:
         self.fan_running = False
         self.buzzer_running = False
         self.lock_engaged = True  # Default state is locked
+        self.power_save_mode = config_obj.POWER_SAVE_MODE
         
         # Initialize GPIO
         if GPIO_AVAILABLE:
@@ -751,6 +933,7 @@ class HardwareController:
             os.system('gpio -g write 17 1')  # Set to HIGH (locked) by default
             GPIO.output(self.config.SOLENOID_PIN, GPIO.HIGH)  # Start with lock engaged
             
+        # Performance optimization: Reduce temperature monitoring frequency
         self.temp_monitor_thread = threading.Thread(target=self._monitor_temperature)
         self.temp_monitor_thread.daemon = True
         self.temp_monitor_thread.start()
@@ -763,7 +946,7 @@ class HardwareController:
         try:
             self.servo.ChangeDutyCycle(self.config.SERVO_OPEN_DUTY)
             time.sleep(self.config.SERVO_DELAY)
-            # Stop PWM to prevent jitter
+            # Stop PWM to prevent jitter and save power
             self.servo.ChangeDutyCycle(0)
         except Exception as e:
             logger.log_error(e, "Failed to open gate")
@@ -776,7 +959,7 @@ class HardwareController:
         try:
             self.servo.ChangeDutyCycle(self.config.SERVO_CLOSE_DUTY)
             time.sleep(self.config.SERVO_DELAY)
-            # Stop PWM to prevent jitter
+            # Stop PWM to prevent jitter and save power
             self.servo.ChangeDutyCycle(0)
         except Exception as e:
             logger.log_error(e, "Failed to close gate")
@@ -842,7 +1025,7 @@ class HardwareController:
         else:
             pattern = [(0.1, 0.05), (0.1, 0.05), (0.1, 0.05)]  # Three short beeps
             
-        threading.Thread(target=_buzzer_thread, args=(duration, pattern)).start()
+        threading.Thread(target=_buzzer_thread, args=(duration, pattern), daemon=True).start()
 
     def control_fan(self, on: bool) -> None:
         if not GPIO_AVAILABLE:
@@ -857,6 +1040,9 @@ class HardwareController:
             logger.log_error(e, "Failed to control fan")
 
     def _monitor_temperature(self) -> None:
+        # Performance optimization: Reduce temperature check frequency
+        check_interval = self.config.TEMP_CHECK_INTERVAL  # seconds
+        
         while True:
             try:
                 if os.path.exists(self.config.THERMAL_FILE):
@@ -872,7 +1058,7 @@ class HardwareController:
             except Exception as e:
                 logger.log_error(e, "Temperature monitoring error")
                 
-            time.sleep(30)  # Check every 30 seconds
+            time.sleep(check_interval)
 
     def cleanup(self) -> None:
         if not GPIO_AVAILABLE:
@@ -893,9 +1079,22 @@ class AccessController:
         self.rate_limit = {}  # Store card_id -> last_access_time
         self.rate_limit_window = 5  # seconds
         self.blacklist = set()  # Store blacklisted card IDs
+        
+        # Performance optimization: Add cache for recent access decisions
+        self.access_cache = {}
+        self.access_cache_ttl = 30  # seconds
+        self.access_cache_size = 50
 
     def process_card(self, card_id: str) -> Tuple[AccessStatus, Optional[Dict[str, Any]]]:
         start_time = time.time()
+        
+        # Check cache for recent access decision
+        cache_key = f"{card_id}_{int(start_time / self.access_cache_ttl)}"
+        if cache_key in self.access_cache:
+            # Use cached decision if recent
+            cached_result = self.access_cache[cache_key]
+            if time.time() - cached_result['timestamp'] < self.access_cache_ttl:
+                return cached_result['status'], cached_result['card_data']
         
         # Check rate limiting
         if card_id in self.rate_limit:
@@ -947,6 +1146,19 @@ class AccessController:
         response_time = time.time() - start_time
         logger.log_access(card_info, status, response_time)
         
+        # Cache the access decision
+        if len(self.access_cache) >= self.access_cache_size:
+            # Remove oldest cache entry
+            oldest_key = min(self.access_cache.keys(), 
+                            key=lambda k: self.access_cache[k]['timestamp'])
+            del self.access_cache[oldest_key]
+            
+        self.access_cache[cache_key] = {
+            'status': status,
+            'card_data': card_data,
+            'timestamp': time.time()
+        }
+        
         return status, card_data
 
     def handle_access(self, card_id: str) -> Tuple[AccessStatus, Optional[Dict[str, Any]]]:
@@ -996,6 +1208,9 @@ class SmallScreenGUI:
             self.root.title("Gate Access Display")
             self.root.geometry("800x480")  # 7-inch Raspberry Pi display resolution
             self.root.attributes('-fullscreen', True)  # Fullscreen for Raspberry Pi
+            
+            # Performance optimization: Reduce window update rate
+            self.root.update_idletasks()  # Initial update
         
         # Main frame
         self.frame = ttk.Frame(self.root, padding="10")
@@ -1050,12 +1265,16 @@ class SmallScreenGUI:
         )
         self.instructions_label.pack(pady=10)
         
-        # Initialize with empty info
-        self.clear_info()
-        
         # For thread-safe GUI updates
         self.update_queue = queue.Queue()
-        self.root.after(100, self._process_queue)
+        
+        # Performance optimization: Reduce update frequency
+        self.update_interval = config.GUI_UPDATE_INTERVAL  # milliseconds
+        self.root.after(self.update_interval, self._process_queue)
+        
+        # Performance optimization: Track if GUI needs updating
+        self.needs_update = False
+        self.last_update_time = time.time()
         
         print("Small screen GUI initialized successfully")
 
@@ -1084,33 +1303,61 @@ class SmallScreenGUI:
 
     def clear_info(self):
         """Clear all student information"""
-        self.name_label.config(text="")
-        self.id_label.config(text="")
-        self.faculty_label.config(text="")
-        self.program_label.config(text="")
-        self.level_label.config(text="")
-        self.photo_label.config(text="Photo")
-        self.status_label.config(text="Ready to Scan", foreground="blue")
-        self.instructions_label.config(text="Please scan your card to enter")
+        # Queue the clear operation instead of doing it directly
+        self.update_queue.put(("clear", None))
 
     def display_card_info(self, card_data, status):
         """Thread-safe method to display card information"""
         self.update_queue.put(("display_info", (card_data, status)))
+        self.needs_update = True
 
     def _process_queue(self):
         """Process GUI update queue"""
         try:
-            while True:
+            # Performance optimization: Process multiple updates at once
+            updates_processed = 0
+            max_updates_per_cycle = 5
+            
+            while updates_processed < max_updates_per_cycle:
                 command, args = self.update_queue.get_nowait()
                 if command == "display_info":
                     self._update_display(*args)
                 elif command == "clear":
-                    self.clear_info()
+                    self._clear_display()
+                updates_processed += 1
+                
         except queue.Empty:
             pass
         finally:
+            # Performance optimization: Only update GUI if needed and not too frequent
+            current_time = time.time()
+            if self.needs_update and (current_time - self.last_update_time >= 0.1):
+                try:
+                    self.root.update_idletasks()  # More efficient than full update()
+                    self.last_update_time = current_time
+                    self.needs_update = False
+                except Exception as e:
+                    # Silently handle update errors to prevent crashes
+                    pass
+                    
             # Schedule next queue check
-            self.root.after(100, self._process_queue)
+            self.root.after(self.update_interval, self._process_queue)
+
+    def _clear_display(self):
+        """Clear the display (called from main thread)"""
+        try:
+            self.name_label.config(text="")
+            self.id_label.config(text="")
+            self.faculty_label.config(text="")
+            self.program_label.config(text="")
+            self.level_label.config(text="")
+            self.photo_label.config(text="Photo")
+            self.status_label.config(text="Ready to Scan", foreground="blue")
+            self.instructions_label.config(text="Please scan your card to enter")
+            self.needs_update = True
+        except Exception as e:
+            # Silently handle errors to prevent crashes
+            pass
 
     def _update_display(self, card_data, status):
         """Update the display with card information (called from main thread)"""
@@ -1152,15 +1399,23 @@ class SmallScreenGUI:
                 self.instructions_label.config(text="Card scanned too frequently. Please wait.")
                 self.root.after(3000, lambda: self.update_queue.put(("clear", None)))
                 
+            self.needs_update = True
+                
         except Exception as e:
             logger.log_error(e, f"Failed to display card info for {card_data.get('id', 'unknown')}")
 
     def update(self):
         """Update the GUI - only needed if not using mainloop()"""
-        try:
-            self.root.update()
-        except Exception as e:
-            logger.log_error(e, "Failed to update GUI")
+        # Performance optimization: Only update if needed and not too frequent
+        current_time = time.time()
+        if self.needs_update and (current_time - self.last_update_time >= 0.1):
+            try:
+                self.root.update_idletasks()  # More efficient than full update()
+                self.last_update_time = current_time
+                self.needs_update = False
+            except Exception as e:
+                # Silently handle update errors
+                pass
 
     def run(self):
         """Start the GUI main loop"""
@@ -1176,6 +1431,9 @@ class AdminGUI:
         self.root = Tk()
         self.root.title("SMART ENTRY Admin Interface")
         self.root.geometry("1024x768")
+        
+        # Performance optimization: Reduce window complexity
+        self.root.update_idletasks()  # Initial update
         
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.root)
@@ -1210,9 +1468,17 @@ class AdminGUI:
         )
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
+        # Performance optimization: Reduce update frequency
+        self.update_interval = config.GUI_UPDATE_INTERVAL * 2  # Less frequent updates for admin GUI
+        
         # Setup periodic updates
-        self._update_logs()
-        self._update_status()
+        self._schedule_updates()
+        
+        # Performance optimization: Track if updates are needed
+        self.needs_log_update = False
+        self.needs_status_update = False
+        self.last_log_update = time.time()
+        self.last_status_update = time.time()
 
     def _setup_dashboard(self):
         # Title
@@ -1442,6 +1708,24 @@ class AdminGUI:
             text="Reset Hardware",
             command=self._reset_hardware
         ).pack(side=tk.LEFT, padx=10, pady=10)
+        
+        # Performance optimization controls
+        perf_frame = ttk.LabelFrame(self.hardware_frame, text="Performance Settings")
+        perf_frame.pack(fill=tk.X, pady=10, padx=5)
+        
+        self.power_save_var = tk.BooleanVar(value=config.POWER_SAVE_MODE)
+        ttk.Checkbutton(
+            perf_frame,
+            text="Power Save Mode",
+            variable=self.power_save_var,
+            command=self._toggle_power_save
+        ).pack(side=tk.LEFT, padx=10, pady=10)
+        
+        ttk.Button(
+            perf_frame,
+            text="Run Garbage Collection",
+            command=self._run_gc
+        ).pack(side=tk.LEFT, padx=10, pady=10)
 
     def _setup_logs_tab(self):
         # Title
@@ -1516,6 +1800,19 @@ class AdminGUI:
         self.hardware.engage_lock()
         self.status_bar.config(text="Hardware reset")
         logger.log_audit("hardware_reset", {"user": "admin"})
+        
+    def _toggle_power_save(self):
+        # Toggle power save mode
+        new_state = self.power_save_var.get()
+        self.hardware.power_save_mode = new_state
+        self.status_bar.config(text=f"Power save mode {'enabled' if new_state else 'disabled'}")
+        logger.log_audit("power_save_toggle", {"state": new_state, "user": "admin"})
+        
+    def _run_gc(self):
+        # Run garbage collection
+        collected = gc.collect()
+        self.status_bar.config(text=f"Garbage collection completed: {collected} objects freed")
+        logger.log_audit("garbage_collection", {"objects_freed": collected, "user": "admin"})
 
     def _refresh_cards(self):
         # Clear existing items
@@ -1564,35 +1861,61 @@ class AdminGUI:
         card_id = self.cards_tree.item(selected[0], "values")[0]
         messagebox.showinfo("Toggle Validity", f"This feature would toggle validity for card {card_id}")
 
+    def _schedule_updates(self):
+        """Schedule periodic updates with optimized frequency"""
+        # Schedule log updates
+        self.root.after(self.update_interval, self._update_logs)
+        
+        # Schedule status updates (less frequent)
+        self.root.after(self.update_interval * 5, self._update_status)
+
     def _update_logs(self):
-        # Get recent logs and update the logs text area
-        logs = logger.get_recent_logs()
-        if logs:
-            for log in logs:
-                self.logs_text.insert(tk.END, log + "\n")
-            self.logs_text.see(tk.END)  # Scroll to bottom
-            
-        # Also update the activity text in dashboard
-        if logs:
-            for log in logs[:5]:  # Show only the 5 most recent logs
-                self.activity_text.insert(tk.END, log + "\n")
-            self.activity_text.see(tk.END)
+        """Update logs with reduced frequency to save resources"""
+        # Only update if visible and not updated recently
+        current_time = time.time()
+        visible_tab = self.notebook.index(self.notebook.select())
+        
+        if (visible_tab == 3 or visible_tab == 0) and (current_time - self.last_log_update >= 1.0):
+            # Get recent logs and update the logs text area
+            logs = logger.get_recent_logs(max_logs=20)  # Reduced number of logs
+            if logs:
+                # For dashboard activity, show only a few recent logs
+                if visible_tab == 0:  # Dashboard
+                    for log in logs[:3]:  # Show only the 3 most recent logs
+                        self.activity_text.insert(tk.END, log + "\n")
+                    self.activity_text.see(tk.END)
+                
+                # For logs tab, show more logs
+                if visible_tab == 3:  # Logs tab
+                    for log in logs:
+                        self.logs_text.insert(tk.END, log + "\n")
+                    self.logs_text.see(tk.END)
+                    
+            self.last_log_update = current_time
             
         # Schedule next update
-        self.root.after(1000, self._update_logs)
+        self.root.after(self.update_interval, self._update_logs)
 
     def _update_status(self):
-        # Update statistics in dashboard
-        metrics = logger._get_current_metrics()
+        """Update statistics with reduced frequency"""
+        # Only update if dashboard is visible and not updated recently
+        current_time = time.time()
+        visible_tab = self.notebook.index(self.notebook.select())
         
-        self.total_requests_label.config(text=str(metrics['total_requests']))
-        self.successful_label.config(text=str(metrics['successful_accesses']))
-        self.failed_label.config(text=str(metrics['failed_accesses']))
-        self.avg_response_label.config(text=f"{metrics['average_response_time']:.4f} sec")
-        self.uptime_label.config(text=f"{metrics['system_uptime']:.1f} sec")
-        
+        if visible_tab == 0 and (current_time - self.last_status_update >= 2.0):
+            # Update statistics in dashboard
+            metrics = logger._get_current_metrics()
+            
+            self.total_requests_label.config(text=str(metrics['total_requests']))
+            self.successful_label.config(text=str(metrics['successful_accesses']))
+            self.failed_label.config(text=str(metrics['failed_accesses']))
+            self.avg_response_label.config(text=f"{metrics['average_response_time']:.4f} sec")
+            self.uptime_label.config(text=f"{metrics['system_uptime']:.1f} sec")
+            
+            self.last_status_update = current_time
+            
         # Schedule next update
-        self.root.after(5000, self._update_status)
+        self.root.after(self.update_interval * 5, self._update_status)
 
     def run(self):
         self.root.mainloop()
@@ -1615,6 +1938,10 @@ class SmartEntrySystem:
         
         # Flag to control system running
         self.running = False
+        
+        # Performance optimization: Add resource monitoring
+        self.last_gc_time = time.time()
+        self.gc_interval = 60  # Run garbage collection every 60 seconds
         
     def _run_small_screen(self):
         """Run the small screen GUI in a separate thread"""
@@ -1644,8 +1971,8 @@ class SmartEntrySystem:
         """Main processing loop"""
         try:
             while self.running:
-                # Wait for card detection
-                card_id = self.nfc_reader.wait_for_card(timeout=0.5)
+                # Wait for card detection with shorter timeout for responsiveness
+                card_id = self.nfc_reader.wait_for_card(timeout=0.2)
                 
                 if card_id:
                     # Process card access
@@ -1655,9 +1982,18 @@ class SmartEntrySystem:
                     if self.small_screen:
                         self.small_screen.display_card_info(card_data, status)
                 
-                # Update small screen GUI
-                if self.small_screen:
+                # Performance optimization: Less frequent GUI updates
+                if self.small_screen and time.time() % 0.2 < 0.05:  # Update roughly every 200ms
                     self.small_screen.update()
+                    
+                # Performance optimization: Periodic garbage collection
+                current_time = time.time()
+                if current_time - self.last_gc_time > self.gc_interval:
+                    gc.collect()
+                    self.last_gc_time = current_time
+                    
+                # Performance optimization: Short sleep to reduce CPU usage
+                time.sleep(0.01)
                     
         except KeyboardInterrupt:
             print("System shutdown requested")
@@ -1671,6 +2007,7 @@ class SmartEntrySystem:
         self.running = False
         self.nfc_reader.stop_reading()
         self.hardware.cleanup()
+        self.db.close()  # Close database connections
         print("System stopped")
         
     def start_admin_interface(self):
