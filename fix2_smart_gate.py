@@ -1702,7 +1702,7 @@ def main():
     system_thread.start()
     
     # Run the admin interface (this will block until closed)
-    # system.start_admin_interface()
+    system.start_admin_interface()
     
     # Keep the main thread running
     try:
