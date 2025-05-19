@@ -1,0 +1,161 @@
+class USB(object):
+    TYPE = "USB"
+
+    @classmethod
+    def find(cls, path):
+        if not path.startswith("usb"):
+            return
+        if libusb is None:
+            log.debug("USB driver not available (libusb not installed)")
+            return
+        log.debug("using libusb-{0}.{1}.{2}".format(*libusb.getVersion()[0:3]))
+        usb_or_none = re.compile(r'^(usb|)$')
+        usb_vid_pid = re.compile(r'^usb(:[0-9a-fA-F]{4})(:[0-9a-fA-F]{4})?$')
+        usb_bus_dev = re.compile(r'^usb(:[0-9]{1,3})(:[0-9]{1,3})?$')
+        match = None
+        for regex in (usb_vid_pid, usb_bus_dev, usb_or_none):
+            m = regex.match(path)
+            if m is not None:
+                log.debug("path matches {0!r}".format(regex.pattern))
+                if regex is usb_vid_pid:
+                    match = [int(s.strip(':'), 16) for s in m.groups() if s]
+                    match = dict(zip(['vid', 'pid'], match))
+                if regex is usb_bus_dev:
+                    match = [int(s.strip(':'), 10) for s in m.groups() if s]
+                    match = dict(zip(['bus', 'adr'], match))
+                if regex is usb_or_none:
+                    match = dict()
+                break
+        else:
+            return None
+        with libusb.USBContext() as context:
+            devices = context.getDeviceList(skip_on_error=True)
+            vid, pid = match.get('vid'), match.get('pid')
+            bus, dev = match.get('bus'), match.get('adr')
+            if vid is not None:
+                devices = [d for d in devices if d.getVendorID() == vid]
+            if pid is not None:
+                devices = [d for d in devices if d.getProductID() == pid]
+            if bus is not None:
+                devices = [d for d in devices if d.getBusNumber() == bus]
+            if dev is not None:
+                devices = [d for d in devices if d.getDeviceAddress() == dev]
+            return [(d.getVendorID(), d.getProductID(), d.getBusNumber(),
+                     d.getDeviceAddress()) for d in devices]
+
+    def __init__(self, usb_bus, dev_adr):
+        if libusb is None:
+            raise IOError("USB driver not available")
+        self.context = libusb.USBContext()
+        self.open(usb_bus, dev_adr)
+
+    def __del__(self):
+        self.close()
+        if self.context:  # pragma: no branch
+            self.context.exit()
+
+    def open(self, usb_bus, dev_adr):
+        if libusb is None:
+            raise IOError("USB driver not available")
+        self.usb_dev = None
+        self.usb_out = None
+        self.usb_inp = None
+        for dev in self.context.getDeviceList(skip_on_error=True):
+            if ((dev.getBusNumber() == usb_bus and
+                 dev.getDeviceAddress() == dev_adr)):
+                break
+        else:
+            log.error("no device {0} on bus {1}".format(dev_adr, usb_bus))
+            raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+        try:
+            first_setting = next(dev.iterSettings())
+        except StopIteration:
+            log.error("no usb configuration settings, please replug device")
+            raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+        def transfer_type(x):
+            return x & libusb.TRANSFER_TYPE_MASK
+        def endpoint_dir(x):
+            return x & libusb.ENDPOINT_DIR_MASK
+        for endpoint in first_setting.iterEndpoints():
+            ep_addr = endpoint.getAddress()
+            ep_attr = endpoint.getAttributes()
+            if transfer_type(ep_attr) == libusb.TRANSFER_TYPE_BULK:
+                if endpoint_dir(ep_addr) == libusb.ENDPOINT_IN:
+                    if not self.usb_inp:
+                        self.usb_inp = endpoint
+                if endpoint_dir(ep_addr) == libusb.ENDPOINT_OUT:
+                    if not self.usb_out:
+                        self.usb_out = endpoint
+        if not (self.usb_inp and self.usb_out):
+            log.error("no bulk endpoints for read and write")
+            raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+        try:
+            # workaround the PN533's buggy USB implementation
+            self._manufacturer_name = dev.getManufacturer()
+            self._product_name = dev.getProduct()
+        except libusb.USBErrorIO:
+            self._manufacturer_name = None
+            self._product_name = None
+        try:
+            self.usb_dev = dev.open()
+            self.usb_dev.claimInterface(0)
+        except libusb.USBErrorAccess:
+            raise IOError(errno.EACCES, os.strerror(errno.EACCES))
+        except libusb.USBErrorBusy:
+            raise IOError(errno.EBUSY, os.strerror(errno.EBUSY))
+        except libusb.USBErrorNoDevice:
+            raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+
+    def close(self):
+        if self.usb_dev:
+            self.usb_dev.close()
+        self.usb_dev = None
+        self.usb_out = None
+        self.usb_inp = None
+
+    @property
+    def manufacturer_name(self):
+        return self._manufacturer_name
+
+    @property
+    def product_name(self):
+        return self._product_name
+
+    def read(self, timeout=0):
+        if libusb is None:
+            raise IOError("USB driver not available")
+        if self.usb_inp is not None:
+            try:
+                ep_addr = self.usb_inp.getAddress()
+                frame = self.usb_dev.bulkRead(ep_addr, 300, timeout)
+            except libusb.USBErrorTimeout:
+                raise IOError(errno.ETIMEDOUT, os.strerror(errno.ETIMEDOUT))
+            except libusb.USBErrorNoDevice:
+                raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+            except libusb.USBError as error:
+                log.error("%r", error)
+                raise IOError(errno.EIO, os.strerror(errno.EIO))
+            if len(frame) == 0:
+                log.error("bulk read returned zero data")
+                raise IOError(errno.EIO, os.strerror(errno.EIO))
+            frame = bytearray(frame)
+            log.log(logging.DEBUG-1, "<<< %s", hexlify(frame).decode())
+            return frame
+
+    def write(self, frame, timeout=0):
+        if libusb is None:
+            raise IOError("USB driver not available")
+        if self.usb_out is not None:
+            log.log(logging.DEBUG-1, ">>> %s", hexlify(frame).decode())
+            try:
+                ep_addr = self.usb_out.getAddress()
+                self.usb_dev.bulkWrite(ep_addr, bytes(frame), timeout)
+                if len(frame) % self.usb_out.getMaxPacketSize() == 0:
+                    self.usb_dev.bulkWrite(ep_addr, b'', timeout)
+            except libusb.USBErrorTimeout:
+                raise IOError(errno.ETIMEDOUT, os.strerror(errno.ETIMEDOUT))
+            except libusb.USBErrorNoDevice:
+                raise IOError(errno.ENODEV, os.strerror(errno.ENODEV))
+            except libusb.USBError as error:
+                log.error("%r", error)
+                raise IOError(errno.EIO, os.strerror(errno.EIO))
