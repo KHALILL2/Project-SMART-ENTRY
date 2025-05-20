@@ -10,9 +10,8 @@ import tkinter as tk
 RELAY_MOTOR = 17
 RELAY_LOCK = 27
 SERVO_PIN = 18
-BUZZER_PIN = 25
-LED_GREEN_PIN = 22
-LED_RED_PIN = 23
+LED_GREEN_PIN = 22  # Green LED with buzzer connected
+LED_RED_PIN = 23    # Red LED with buzzer connected
 
 # Initialize GPIO
 GPIO.setmode(GPIO.BCM)
@@ -22,7 +21,6 @@ GPIO.setwarnings(False)
 GPIO.setup(RELAY_MOTOR, GPIO.OUT)
 GPIO.setup(RELAY_LOCK, GPIO.OUT)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
-GPIO.setup(BUZZER_PIN, GPIO.OUT)
 GPIO.setup(LED_GREEN_PIN, GPIO.OUT)
 GPIO.setup(LED_RED_PIN, GPIO.OUT)
 
@@ -32,37 +30,88 @@ servo.start(0)  # Start with 0 duty cycle (no movement)
 
 # Initialize hardware state
 GPIO.output(RELAY_MOTOR, GPIO.HIGH)  # Motor off
-GPIO.output(RELAY_LOCK, GPIO.HIGH)   # Lock closed (as per your example)
 GPIO.output(LED_GREEN_PIN, GPIO.LOW)  # Green LED off
 GPIO.output(LED_RED_PIN, GPIO.LOW)    # Red LED off
-GPIO.output(BUZZER_PIN, GPIO.LOW)     # Buzzer off
 
-# Try to initialize the lock using direct command as well
+# Try multiple approaches for the lock
 try:
+    # Method 1: Direct GPIO
+    GPIO.output(RELAY_LOCK, GPIO.HIGH)   # Lock closed (HIGH)
+    
+    # Method 2: System command
     os.system('gpio -g mode 27 out')
     os.system('gpio -g write 27 1')  # HIGH = locked
-    print("Lock initialized with gpio command")
+    
+    # Method 3: Alternative GPIO library
+    os.system('echo 27 > /sys/class/gpio/export 2>/dev/null || true')
+    os.system('echo out > /sys/class/gpio/gpio27/direction')
+    os.system('echo 1 > /sys/class/gpio/gpio27/value')
+    
+    print("Lock initialized with multiple methods")
 except Exception as e:
-    print(f"Error initializing lock with gpio command: {e}")
+    print(f"Error initializing lock: {e}")
 
 print("Hardware initialized successfully")
+
+# PN532 NFC Reader setup
+try:
+    # Try to import the PN532 library
+    import Adafruit_PN532 as PN532
+    
+    # Configure the PN532 for I2C mode
+    pn532 = PN532.PN532(i2c=True, reset=20, req=16)
+    pn532.begin()
+    
+    # Get firmware version to verify communication
+    ic, ver, rev, support = pn532.get_firmware_version()
+    print(f"Found PN532 with firmware version: {ver}.{rev}")
+    
+    # Configure PN532 to read RFID tags
+    pn532.SAM_configuration()
+    
+    PN532_AVAILABLE = True
+    print("PN532 initialized successfully")
+except ImportError:
+    print("Adafruit_PN532 library not found. Using mock NFC reader.")
+    PN532_AVAILABLE = False
+except Exception as e:
+    print(f"Error initializing PN532: {e}")
+    PN532_AVAILABLE = False
 
 # Mock NFC reader (since we don't have the actual hardware in this environment)
 class MockNFCReader:
     def __init__(self):
         self.valid_cards = ["04010203040506", "1234567890"]
         
-    def read(self):
+    def read_card(self):
         # This would normally wait for a card, but we'll just return None
         # The actual reading will be triggered by the GUI
-        return None, None
+        return None
         
     def simulate_read(self, card_id):
         # Simulate a card read
-        return card_id, "Simulated card"
+        return card_id
 
 # NFC reader instance
-reader = MockNFCReader()
+if PN532_AVAILABLE:
+    def read_pn532():
+        try:
+            # Check if a card is available
+            uid = pn532.read_passive_target(timeout=100)
+            if uid is not None:
+                # Convert UID to string
+                card_id = ''.join([format(i, '02X') for i in uid])
+                print(f"Card detected: {card_id}")
+                return card_id
+            return None
+        except Exception as e:
+            print(f"Error reading card: {e}")
+            return None
+    
+    card_reader = {"read_card": read_pn532}
+else:
+    mock_reader = MockNFCReader()
+    card_reader = {"read_card": mock_reader.read_card, "simulate_read": mock_reader.simulate_read}
 
 # Hardware control functions
 def open_gate():
@@ -95,10 +144,17 @@ def unlock_door():
     """Unlock the door by activating the solenoid lock relay"""
     try:
         print("Unlocking door...")
-        # Set relay to LOW to unlock (as per your example)
+        # Try multiple methods to ensure the lock works
+        
+        # Method 1: Direct GPIO
         GPIO.output(RELAY_LOCK, GPIO.LOW)
-        # Also try with gpio command
+        
+        # Method 2: System command
         os.system('gpio -g write 27 0')
+        
+        # Method 3: Alternative GPIO library
+        os.system('echo 0 > /sys/class/gpio/gpio27/value')
+        
         print("Door unlocked")
     except Exception as e:
         print(f"Error unlocking door: {e}")
@@ -107,10 +163,17 @@ def lock_door():
     """Lock the door by deactivating the solenoid lock relay"""
     try:
         print("Locking door...")
-        # Set relay to HIGH to lock (as per your example)
+        # Try multiple methods to ensure the lock works
+        
+        # Method 1: Direct GPIO
         GPIO.output(RELAY_LOCK, GPIO.HIGH)
-        # Also try with gpio command
+        
+        # Method 2: System command
         os.system('gpio -g write 27 1')
+        
+        # Method 3: Alternative GPIO library
+        os.system('echo 1 > /sys/class/gpio/gpio27/value')
+        
         print("Door locked")
     except Exception as e:
         print(f"Error locking door: {e}")
@@ -136,69 +199,42 @@ def stop_motor():
         print(f"Error stopping motor: {e}")
 
 def green_led_on():
-    """Turn on the green LED"""
+    """Turn on the green LED (and connected buzzer)"""
     try:
         # Make sure red LED is off
         GPIO.output(LED_RED_PIN, GPIO.LOW)
         # Turn on green LED
         GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
-        print("Green LED on")
+        print("Green LED on (with buzzer)")
     except Exception as e:
         print(f"Error turning on green LED: {e}")
 
 def green_led_off():
-    """Turn off the green LED"""
+    """Turn off the green LED (and connected buzzer)"""
     try:
         GPIO.output(LED_GREEN_PIN, GPIO.LOW)
-        print("Green LED off")
+        print("Green LED off (with buzzer)")
     except Exception as e:
         print(f"Error turning off green LED: {e}")
 
 def red_led_on():
-    """Turn on the red LED"""
+    """Turn on the red LED (and connected buzzer)"""
     try:
         # Make sure green LED is off
         GPIO.output(LED_GREEN_PIN, GPIO.LOW)
         # Turn on red LED
         GPIO.output(LED_RED_PIN, GPIO.HIGH)
-        print("Red LED on")
+        print("Red LED on (with buzzer)")
     except Exception as e:
         print(f"Error turning on red LED: {e}")
 
 def red_led_off():
-    """Turn off the red LED"""
+    """Turn off the red LED (and connected buzzer)"""
     try:
         GPIO.output(LED_RED_PIN, GPIO.LOW)
-        print("Red LED off")
+        print("Red LED off (with buzzer)")
     except Exception as e:
         print(f"Error turning off red LED: {e}")
-
-def sound_buzzer(success=True):
-    """Sound the buzzer with a pattern based on success/failure"""
-    def _buzzer_thread():
-        try:
-            if success:
-                # Success pattern: one short, one long
-                GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                time.sleep(0.1)
-                GPIO.output(BUZZER_PIN, GPIO.LOW)
-                time.sleep(0.1)
-                GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                time.sleep(0.3)
-                GPIO.output(BUZZER_PIN, GPIO.LOW)
-            else:
-                # Error pattern: three short beeps
-                for _ in range(3):
-                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                    time.sleep(0.1)
-                    GPIO.output(BUZZER_PIN, GPIO.LOW)
-                    time.sleep(0.1)
-            print(f"Buzzer sound: {'success' if success else 'error'}")
-        except Exception as e:
-            print(f"Error sounding buzzer: {e}")
-    
-    # Run in a separate thread to not block the main thread
-    threading.Thread(target=_buzzer_thread).start()
 
 def reset_hardware():
     """Reset all hardware to default state"""
@@ -210,8 +246,7 @@ def reset_hardware():
         # Stop motor
         GPIO.output(RELAY_MOTOR, GPIO.HIGH)
         # Lock door
-        GPIO.output(RELAY_LOCK, GPIO.HIGH)
-        os.system('gpio -g write 27 1')
+        lock_door()
         # Stop servo
         servo.ChangeDutyCycle(0)
         print("Hardware reset complete")
@@ -223,9 +258,8 @@ def valid_access_workflow():
     """Complete workflow for valid access"""
     try:
         print("Starting valid access workflow...")
-        # Green LED and success sound
+        # Green LED and success sound (buzzer connected to LED)
         green_led_on()
-        sound_buzzer(success=True)
         
         # Unlock door
         unlock_door()
@@ -256,9 +290,8 @@ def invalid_access_workflow():
     """Complete workflow for invalid access"""
     try:
         print("Starting invalid access workflow...")
-        # Red LED and error sound
+        # Red LED and error sound (buzzer connected to LED)
         red_led_on()
-        sound_buzzer(success=False)
         
         # Wait a moment
         time.sleep(3)
@@ -271,6 +304,35 @@ def invalid_access_workflow():
         print(f"Error in invalid access workflow: {e}")
         # Make sure to reset hardware
         reset_hardware()
+
+# Card reading thread
+def card_reading_thread(gui_instance):
+    """Thread to continuously read cards"""
+    while True:
+        try:
+            # Try to read a card
+            card_id = card_reader["read_card"]()
+            if card_id:
+                print(f"Card detected: {card_id}")
+                gui_instance.log(f"Card detected: {card_id}")
+                
+                # Check if it's a valid card (in a real system, check against database)
+                if card_id in ["04010203040506", "1234567890"]:
+                    gui_instance.log(f"Valid card: {card_id}")
+                    gui_instance.status_var.set("Valid card detected")
+                    # Run valid access workflow
+                    valid_access_workflow()
+                else:
+                    gui_instance.log(f"Invalid card: {card_id}")
+                    gui_instance.status_var.set("Invalid card detected")
+                    # Run invalid access workflow
+                    invalid_access_workflow()
+            
+            # Sleep to prevent CPU overuse
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"Error in card reading thread: {e}")
+            time.sleep(1)  # Sleep longer on error
 
 # GUI for controlling the system
 class AdminGUI:
@@ -301,6 +363,11 @@ class AdminGUI:
         self.notebook.add(self.test_frame, text="Test Scenarios")
         self._setup_test_tab()
         
+        # Lock troubleshooting tab
+        self.lock_frame = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.lock_frame, text="Lock Troubleshooting")
+        self._setup_lock_tab()
+        
         # Logs tab
         self.logs_frame = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(self.logs_frame, text="Logs")
@@ -314,6 +381,11 @@ class AdminGUI:
         
         # Reset hardware on startup
         reset_hardware()
+        
+        # Start card reading thread if PN532 is available
+        if PN532_AVAILABLE:
+            self.log("Starting card reading thread")
+            threading.Thread(target=card_reading_thread, args=(self,), daemon=True).start()
         
     def _setup_hardware_tab(self):
         # Gate control frame
@@ -338,20 +410,13 @@ class AdminGUI:
         ttk.Button(motor_frame, text="Stop Motor", command=self._stop_motor).pack(side=LEFT, padx=10, pady=10)
         
         # LED control frame
-        led_frame = ttk.LabelFrame(self.hw_frame, text="LED Control")
+        led_frame = ttk.LabelFrame(self.hw_frame, text="LED Control (with Buzzers)")
         led_frame.pack(fill=X, pady=10)
         
         ttk.Button(led_frame, text="Green LED On", command=self._green_led_on).pack(side=LEFT, padx=10, pady=10)
         ttk.Button(led_frame, text="Green LED Off", command=self._green_led_off).pack(side=LEFT, padx=10, pady=10)
         ttk.Button(led_frame, text="Red LED On", command=self._red_led_on).pack(side=LEFT, padx=10, pady=10)
         ttk.Button(led_frame, text="Red LED Off", command=self._red_led_off).pack(side=LEFT, padx=10, pady=10)
-        
-        # Buzzer control frame
-        buzzer_frame = ttk.LabelFrame(self.hw_frame, text="Buzzer Control")
-        buzzer_frame.pack(fill=X, pady=10)
-        
-        ttk.Button(buzzer_frame, text="Success Sound", command=lambda: sound_buzzer(True)).pack(side=LEFT, padx=10, pady=10)
-        ttk.Button(buzzer_frame, text="Error Sound", command=lambda: sound_buzzer(False)).pack(side=LEFT, padx=10, pady=10)
         
         # Reset hardware button
         reset_frame = ttk.Frame(self.hw_frame)
@@ -376,6 +441,57 @@ class AdminGUI:
         self.card_id_var.set("04010203040506")  # Default valid card
         ttk.Entry(card_frame, textvariable=self.card_id_var, width=20).pack(side=LEFT, padx=10, pady=10)
         ttk.Button(card_frame, text="Scan Card", command=self._simulate_card_scan).pack(side=LEFT, padx=10, pady=10)
+        
+        # PN532 status frame
+        pn532_frame = ttk.LabelFrame(self.test_frame, text="PN532 Status")
+        pn532_frame.pack(fill=X, pady=10)
+        
+        status_text = "PN532 Available" if PN532_AVAILABLE else "PN532 Not Available (Using Mock)"
+        ttk.Label(pn532_frame, text=status_text).pack(side=LEFT, padx=10, pady=10)
+        
+        if not PN532_AVAILABLE:
+            ttk.Button(pn532_frame, text="Retry PN532 Initialization", command=self._retry_pn532).pack(side=LEFT, padx=10, pady=10)
+    
+    def _setup_lock_tab(self):
+        # Lock troubleshooting instructions
+        ttk.Label(
+            self.lock_frame, 
+            text="Lock Troubleshooting", 
+            font=("Helvetica", 14, "bold")
+        ).pack(pady=(0, 10))
+        
+        ttk.Label(
+            self.lock_frame,
+            text="If the lock is not working, try these direct commands:",
+            wraplength=700
+        ).pack(pady=5)
+        
+        # Method 1: GPIO commands
+        method1_frame = ttk.LabelFrame(self.lock_frame, text="Method 1: Direct GPIO Commands")
+        method1_frame.pack(fill=X, pady=10)
+        
+        ttk.Button(method1_frame, text="Lock (GPIO HIGH)", command=lambda: self._direct_lock(1)).pack(side=LEFT, padx=10, pady=10)
+        ttk.Button(method1_frame, text="Unlock (GPIO LOW)", command=lambda: self._direct_lock(0)).pack(side=LEFT, padx=10, pady=10)
+        
+        # Method 2: System commands
+        method2_frame = ttk.LabelFrame(self.lock_frame, text="Method 2: System Commands")
+        method2_frame.pack(fill=X, pady=10)
+        
+        ttk.Button(method2_frame, text="Lock (gpio write 1)", command=lambda: self._gpio_command(1)).pack(side=LEFT, padx=10, pady=10)
+        ttk.Button(method2_frame, text="Unlock (gpio write 0)", command=lambda: self._gpio_command(0)).pack(side=LEFT, padx=10, pady=10)
+        
+        # Method 3: Sysfs interface
+        method3_frame = ttk.LabelFrame(self.lock_frame, text="Method 3: Sysfs Interface")
+        method3_frame.pack(fill=X, pady=10)
+        
+        ttk.Button(method3_frame, text="Lock (echo 1)", command=lambda: self._sysfs_command(1)).pack(side=LEFT, padx=10, pady=10)
+        ttk.Button(method3_frame, text="Unlock (echo 0)", command=lambda: self._sysfs_command(0)).pack(side=LEFT, padx=10, pady=10)
+        
+        # Pulse test
+        pulse_frame = ttk.LabelFrame(self.lock_frame, text="Pulse Test (Rapidly Toggle Lock)")
+        pulse_frame.pack(fill=X, pady=10)
+        
+        ttk.Button(pulse_frame, text="Run Pulse Test", command=self._pulse_test).pack(side=LEFT, padx=10, pady=10)
         
     def _setup_logs_tab(self):
         # Logs text area
@@ -429,22 +545,22 @@ class AdminGUI:
     def _green_led_on(self):
         green_led_on()
         self.status_var.set("Green LED on")
-        self.log("Green LED turned on")
+        self.log("Green LED turned on (with buzzer)")
         
     def _green_led_off(self):
         green_led_off()
         self.status_var.set("Green LED off")
-        self.log("Green LED turned off")
+        self.log("Green LED turned off (with buzzer)")
         
     def _red_led_on(self):
         red_led_on()
         self.status_var.set("Red LED on")
-        self.log("Red LED turned on")
+        self.log("Red LED turned on (with buzzer)")
         
     def _red_led_off(self):
         red_led_off()
         self.status_var.set("Red LED off")
-        self.log("Red LED turned off")
+        self.log("Red LED turned off (with buzzer)")
         
     def _reset_hardware(self):
         reset_hardware()
@@ -468,7 +584,7 @@ class AdminGUI:
         self.log(f"Simulating card scan: {card_id}")
         
         # Check if it's a valid card
-        if card_id in reader.valid_cards:
+        if card_id in ["04010203040506", "1234567890"]:
             self.log(f"Valid card detected: {card_id}")
             self.status_var.set("Valid card scanned")
             # Run valid access workflow
@@ -478,6 +594,103 @@ class AdminGUI:
             self.status_var.set("Invalid card scanned")
             # Run invalid access workflow
             threading.Thread(target=invalid_access_workflow).start()
+            
+    def _retry_pn532(self):
+        self.log("Attempting to reinitialize PN532...")
+        try:
+            # Try to import the PN532 library
+            import Adafruit_PN532 as PN532
+            
+            # Configure the PN532 for I2C mode
+            pn532 = PN532.PN532(i2c=True, reset=20, req=16)
+            pn532.begin()
+            
+            # Get firmware version to verify communication
+            ic, ver, rev, support = pn532.get_firmware_version()
+            self.log(f"Found PN532 with firmware version: {ver}.{rev}")
+            
+            # Configure PN532 to read RFID tags
+            pn532.SAM_configuration()
+            
+            global PN532_AVAILABLE
+            PN532_AVAILABLE = True
+            self.log("PN532 initialized successfully")
+            
+            # Restart the card reading thread
+            threading.Thread(target=card_reading_thread, args=(self,), daemon=True).start()
+            
+            # Update the status
+            self.status_var.set("PN532 initialized")
+            
+            # Refresh the test tab
+            self.notebook.forget(1)  # Remove the old tab
+            self.test_frame = ttk.Frame(self.notebook, padding=10)
+            self.notebook.insert(1, self.test_frame, text="Test Scenarios")
+            self._setup_test_tab()
+            
+        except ImportError:
+            self.log("Adafruit_PN532 library not found. Using mock NFC reader.")
+            self.status_var.set("PN532 library not found")
+        except Exception as e:
+            self.log(f"Error initializing PN532: {e}")
+            self.status_var.set("PN532 initialization failed")
+            
+    def _direct_lock(self, state):
+        """Direct GPIO control of lock"""
+        try:
+            GPIO.output(RELAY_LOCK, state)
+            self.log(f"Direct GPIO: Set lock to {'HIGH (locked)' if state else 'LOW (unlocked)'}")
+            self.status_var.set(f"Lock set to {'HIGH' if state else 'LOW'} via GPIO")
+        except Exception as e:
+            self.log(f"Error in direct GPIO control: {e}")
+            
+    def _gpio_command(self, state):
+        """Control lock via gpio command"""
+        try:
+            os.system(f'gpio -g write 27 {state}')
+            self.log(f"System command: Set lock to {'HIGH (locked)' if state else 'LOW (unlocked)'}")
+            self.status_var.set(f"Lock set to {'HIGH' if state else 'LOW'} via gpio command")
+        except Exception as e:
+            self.log(f"Error in gpio command: {e}")
+            
+    def _sysfs_command(self, state):
+        """Control lock via sysfs interface"""
+        try:
+            os.system('echo 27 > /sys/class/gpio/export 2>/dev/null || true')
+            os.system('echo out > /sys/class/gpio/gpio27/direction')
+            os.system(f'echo {state} > /sys/class/gpio/gpio27/value')
+            self.log(f"Sysfs: Set lock to {'HIGH (locked)' if state else 'LOW (unlocked)'}")
+            self.status_var.set(f"Lock set to {'HIGH' if state else 'LOW'} via sysfs")
+        except Exception as e:
+            self.log(f"Error in sysfs command: {e}")
+            
+    def _pulse_test(self):
+        """Rapidly toggle the lock to test it"""
+        def pulse_thread():
+            try:
+                self.log("Starting lock pulse test...")
+                self.status_var.set("Running lock pulse test")
+                
+                # Pulse the lock 5 times
+                for i in range(5):
+                    # Unlock
+                    GPIO.output(RELAY_LOCK, GPIO.LOW)
+                    os.system('gpio -g write 27 0')
+                    self.log(f"Pulse {i+1}/5: Unlocked")
+                    time.sleep(0.5)
+                    
+                    # Lock
+                    GPIO.output(RELAY_LOCK, GPIO.HIGH)
+                    os.system('gpio -g write 27 1')
+                    self.log(f"Pulse {i+1}/5: Locked")
+                    time.sleep(0.5)
+                    
+                self.log("Lock pulse test complete")
+                self.status_var.set("Lock pulse test complete")
+            except Exception as e:
+                self.log(f"Error in pulse test: {e}")
+                
+        threading.Thread(target=pulse_thread).start()
 
 # Main function
 def main():
