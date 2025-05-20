@@ -49,7 +49,7 @@ except (ImportError, RuntimeError):
     GPIO = MockGPIO()
     GPIO_AVAILABLE = False
 
-from tkinter import Tk, Label, Button, messagebox, Entry, Toplevel, Text, END
+from tkinter import Tk, Label, Button, messagebox, Entry, Toplevel, Text, END, StringVar
 from tkinter import ttk
 import tkinter as tk
 from cryptography.fernet import Fernet, InvalidToken
@@ -60,6 +60,7 @@ import traceback
 import json
 from pathlib import Path
 import queue
+from PIL import Image, ImageTk
 
 class AccessStatus(Enum):
     GRANTED = auto()
@@ -437,7 +438,8 @@ class CardDatabase:
         if self.encrypted:
             self._setup_encryption()
         self._setup_database()
-        self._add_demo_data()
+        
+        # No demo data by default - user will add their own cards
 
     def _setup_encryption(self) -> None:
         try:
@@ -480,31 +482,6 @@ class CardDatabase:
             conn.close()
         except Exception as e:
             logger.log_error(e, "Failed to setup database")
-
-    def _add_demo_data(self) -> None:
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM cards")
-            count = cursor.fetchone()[0]
-            if count == 0:
-                demo_cards = [
-                    ("04010203040506", "John Smith", "Engineering", "Computer Science", "Year 3", "ENG123456", 
-                     "john.smith@university.edu", (datetime.now() + timedelta(days=365)).isoformat(), 1, 
-                     None, "photos/john_smith.jpg"),
-                    ("04060708090A0B", "Jane Doe", "Science", "Physics", "Year 2", "SCI789012", 
-                     "jane.doe@university.edu", (datetime.now() + timedelta(days=180)).isoformat(), 1, 
-                     None, "photos/jane_doe.jpg"),
-                    ("040C0D0E0F1011", "Invalid User", "Business", "Management", "Year 1", "BUS345678", 
-                     "invalid.user@university.edu", (datetime.now() - timedelta(days=10)).isoformat(), 0, 
-                     None, "photos/invalid_user.jpg")
-                ]
-                for card in demo_cards:
-                    self.add_card(*card)
-                print("Added demo data to database")
-            conn.close()
-        except Exception as e:
-            logger.log_error(e, "Failed to add demo data")
 
     def _encrypt(self, data: str) -> str:
         if not self.encrypted or not data:
@@ -643,6 +620,43 @@ class CardDatabase:
         except Exception as e:
             logger.log_error(e, "Failed to get all cards")
             return []
+            
+    def delete_card(self, card_id: str) -> bool:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+            conn.commit()
+            conn.close()
+            
+            # Remove from cache if exists
+            if card_id in self.card_cache:
+                del self.card_cache[card_id]
+                
+            return True
+        except Exception as e:
+            logger.log_error(e, f"Failed to delete card {card_id}")
+            return False
+            
+    def update_card_validity(self, card_id: str, is_valid: bool) -> bool:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE cards SET is_valid = ? WHERE id = ?", 
+                (1 if is_valid else 0, card_id)
+            )
+            conn.commit()
+            conn.close()
+            
+            # Update cache if card exists
+            if card_id in self.card_cache:
+                self.card_cache[card_id]['is_valid'] = 1 if is_valid else 0
+                
+            return True
+        except Exception as e:
+            logger.log_error(e, f"Failed to update card validity for {card_id}")
+            return False
 
 class NFCReader:
     def __init__(self, config_obj: Config) -> None:
@@ -814,6 +828,9 @@ class HardwareController:
         self.temp_monitor_thread = threading.Thread(target=self._monitor_temperature)
         self.temp_monitor_thread.daemon = True
         self.temp_monitor_thread.start()
+        
+        # Double-check lock is engaged at startup
+        self.engage_lock()
 
     def open_gate(self) -> None:
         if not GPIO_AVAILABLE:
@@ -855,6 +872,7 @@ class HardwareController:
             GPIO.output(self.config.SOLENOID_PIN, GPIO.HIGH)  # HIGH = locked
             os.system('gpio -g write 27 1')  # Set GPIO 27 HIGH using gpio command
             self.lock_engaged = True
+            print("Lock engaged (GPIO 27 HIGH)")
         except Exception as e:
             logger.log_error(e, "Failed to engage lock")
 
@@ -870,6 +888,7 @@ class HardwareController:
             GPIO.output(self.config.SOLENOID_PIN, GPIO.LOW)  # LOW = unlocked
             os.system('gpio -g write 27 0')  # Set GPIO 27 LOW using gpio command
             self.lock_engaged = False
+            print("Lock disengaged (GPIO 27 LOW)")
         except Exception as e:
             logger.log_error(e, "Failed to disengage lock")
 
@@ -881,6 +900,11 @@ class HardwareController:
             return
             
         try:
+            # Make sure red LED is off when turning green on
+            if state:
+                GPIO.output(self.config.LED_RED_PIN, GPIO.LOW)
+                self.red_led_on = False
+                
             GPIO.output(self.config.LED_GREEN_PIN, GPIO.HIGH if state else GPIO.LOW)
             self.green_led_on = state
         except Exception as e:
@@ -894,6 +918,11 @@ class HardwareController:
             return
             
         try:
+            # Make sure green LED is off when turning red on
+            if state:
+                GPIO.output(self.config.LED_GREEN_PIN, GPIO.LOW)
+                self.green_led_on = False
+                
             GPIO.output(self.config.LED_RED_PIN, GPIO.HIGH if state else GPIO.LOW)
             self.red_led_on = state
         except Exception as e:
@@ -961,6 +990,32 @@ class HardwareController:
                 logger.log_error(e, "Temperature monitoring error")
                 
             time.sleep(30)  # Check every 30 seconds
+
+    def reset_hardware(self) -> None:
+        """Reset all hardware to default state"""
+        if not GPIO_AVAILABLE:
+            print("MockGPIO: Resetting all hardware")
+            self.green_led_on = False
+            self.red_led_on = False
+            self.lock_engaged = True
+            return
+            
+        try:
+            # Turn off all LEDs
+            GPIO.output(self.config.LED_GREEN_PIN, GPIO.LOW)
+            GPIO.output(self.config.LED_RED_PIN, GPIO.LOW)
+            self.green_led_on = False
+            self.red_led_on = False
+            
+            # Close gate
+            self.close_gate()
+            
+            # Engage lock
+            self.engage_lock()
+            
+            print("All hardware reset to default state")
+        except Exception as e:
+            logger.log_error(e, "Failed to reset hardware")
 
     def cleanup(self) -> None:
         if not GPIO_AVAILABLE:
@@ -1282,6 +1337,199 @@ class SmallScreenGUI:
         if not self.is_toplevel:
             self.root.mainloop()
 
+class CardRegistrationDialog:
+    def __init__(self, parent, db, card_id=None):
+        self.parent = parent
+        self.db = db
+        self.card_id = card_id
+        self.result = False
+        
+        # Create dialog window
+        self.dialog = Toplevel(parent)
+        self.dialog.title("Card Registration" if not card_id else "Edit Card")
+        self.dialog.geometry("500x500")
+        self.dialog.resizable(False, False)
+        self.dialog.grab_set()  # Make window modal
+        
+        # Card ID frame
+        id_frame = ttk.Frame(self.dialog, padding=10)
+        id_frame.pack(fill=tk.X)
+        
+        ttk.Label(id_frame, text="Card ID:").pack(side=tk.LEFT, padx=5)
+        self.id_var = StringVar()
+        if card_id:
+            self.id_var.set(card_id)
+            id_entry = ttk.Entry(id_frame, textvariable=self.id_var, width=30, state="readonly")
+        else:
+            id_entry = ttk.Entry(id_frame, textvariable=self.id_var, width=30)
+        id_entry.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        
+        if not card_id:
+            ttk.Button(id_frame, text="Scan", command=self._scan_card).pack(side=tk.LEFT, padx=5)
+        
+        # Student info frame
+        info_frame = ttk.LabelFrame(self.dialog, text="Student Information", padding=10)
+        info_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Name
+        name_frame = ttk.Frame(info_frame)
+        name_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(name_frame, text="Name:", width=15).pack(side=tk.LEFT)
+        self.name_var = StringVar()
+        ttk.Entry(name_frame, textvariable=self.name_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Student ID
+        student_id_frame = ttk.Frame(info_frame)
+        student_id_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(student_id_frame, text="Student ID:", width=15).pack(side=tk.LEFT)
+        self.student_id_var = StringVar()
+        ttk.Entry(student_id_frame, textvariable=self.student_id_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Faculty
+        faculty_frame = ttk.Frame(info_frame)
+        faculty_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(faculty_frame, text="Faculty:", width=15).pack(side=tk.LEFT)
+        self.faculty_var = StringVar()
+        ttk.Entry(faculty_frame, textvariable=self.faculty_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Program
+        program_frame = ttk.Frame(info_frame)
+        program_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(program_frame, text="Program:", width=15).pack(side=tk.LEFT)
+        self.program_var = StringVar()
+        ttk.Entry(program_frame, textvariable=self.program_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Level
+        level_frame = ttk.Frame(info_frame)
+        level_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(level_frame, text="Level:", width=15).pack(side=tk.LEFT)
+        self.level_var = StringVar()
+        ttk.Entry(level_frame, textvariable=self.level_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Email
+        email_frame = ttk.Frame(info_frame)
+        email_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(email_frame, text="Email:", width=15).pack(side=tk.LEFT)
+        self.email_var = StringVar()
+        ttk.Entry(email_frame, textvariable=self.email_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Expiry date
+        expiry_frame = ttk.Frame(info_frame)
+        expiry_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(expiry_frame, text="Expiry Date:", width=15).pack(side=tk.LEFT)
+        self.expiry_var = StringVar()
+        self.expiry_var.set((datetime.now() + timedelta(days=365)).strftime("%Y-%m-%d"))
+        ttk.Entry(expiry_frame, textvariable=self.expiry_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Valid checkbox
+        valid_frame = ttk.Frame(info_frame)
+        valid_frame.pack(fill=tk.X, pady=5)
+        self.valid_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(valid_frame, text="Card is Valid", variable=self.valid_var).pack(side=tk.LEFT)
+        
+        # Photo path
+        photo_frame = ttk.Frame(info_frame)
+        photo_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(photo_frame, text="Photo Path:", width=15).pack(side=tk.LEFT)
+        self.photo_path_var = StringVar()
+        ttk.Entry(photo_frame, textvariable=self.photo_path_var, width=30).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # Buttons frame
+        buttons_frame = ttk.Frame(self.dialog, padding=10)
+        buttons_frame.pack(fill=tk.X)
+        
+        ttk.Button(buttons_frame, text="Cancel", command=self.dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(buttons_frame, text="Save", command=self._save_card).pack(side=tk.RIGHT, padx=5)
+        
+        # If editing existing card, load data
+        if card_id:
+            self._load_card_data()
+            
+    def _scan_card(self):
+        # This would normally trigger the NFC reader to scan a card
+        # For now, we'll just show a dialog to enter a card ID
+        scan_dialog = Toplevel(self.dialog)
+        scan_dialog.title("Scan Card")
+        scan_dialog.geometry("300x150")
+        scan_dialog.resizable(False, False)
+        scan_dialog.grab_set()
+        
+        ttk.Label(scan_dialog, text="Please scan a card or enter ID manually:").pack(pady=10)
+        
+        id_var = StringVar()
+        ttk.Entry(scan_dialog, textvariable=id_var, width=30).pack(pady=10)
+        
+        def set_id():
+            self.id_var.set(id_var.get())
+            scan_dialog.destroy()
+            
+        ttk.Button(scan_dialog, text="OK", command=set_id).pack(pady=10)
+        
+    def _load_card_data(self):
+        card_data = self.db.get_card(self.card_id)
+        if card_data:
+            self.name_var.set(card_data.get('name', ''))
+            self.student_id_var.set(card_data.get('student_id', ''))
+            self.faculty_var.set(card_data.get('faculty', ''))
+            self.program_var.set(card_data.get('program', ''))
+            self.level_var.set(card_data.get('level', ''))
+            self.email_var.set(card_data.get('email', ''))
+            
+            if card_data.get('expiry_date'):
+                try:
+                    expiry = datetime.fromisoformat(card_data['expiry_date'])
+                    self.expiry_var.set(expiry.strftime("%Y-%m-%d"))
+                except:
+                    pass
+                    
+            self.valid_var.set(bool(card_data.get('is_valid', False)))
+            self.photo_path_var.set(card_data.get('photo_path', ''))
+            
+    def _save_card(self):
+        # Validate inputs
+        card_id = self.id_var.get().strip()
+        if not card_id:
+            messagebox.showerror("Error", "Card ID is required")
+            return
+            
+        name = self.name_var.get().strip()
+        if not name:
+            messagebox.showerror("Error", "Name is required")
+            return
+            
+        # Format expiry date
+        try:
+            expiry_date = datetime.strptime(self.expiry_var.get(), "%Y-%m-%d").isoformat()
+        except:
+            messagebox.showerror("Error", "Invalid expiry date format (YYYY-MM-DD)")
+            return
+            
+        # Save to database
+        success = self.db.add_card(
+            card_id=card_id,
+            name=name,
+            faculty=self.faculty_var.get().strip(),
+            program=self.program_var.get().strip(),
+            level=self.level_var.get().strip(),
+            student_id=self.student_id_var.get().strip(),
+            email=self.email_var.get().strip(),
+            expiry_date=expiry_date,
+            is_valid=1 if self.valid_var.get() else 0,
+            photo_path=self.photo_path_var.get().strip()
+        )
+        
+        if success:
+            self.result = True
+            messagebox.showinfo("Success", f"Card {card_id} saved successfully")
+            self.dialog.destroy()
+        else:
+            messagebox.showerror("Error", "Failed to save card")
+            
+    def show(self):
+        # Wait for dialog to close
+        self.parent.wait_window(self.dialog)
+        return self.result
+
 class AdminGUI:
     def __init__(self, db, hardware, access_controller, nfc_reader):
         self.db = db
@@ -1329,6 +1577,9 @@ class AdminGUI:
         # Setup periodic updates
         self._update_logs()
         self._update_status()
+        
+        # Ensure hardware is in correct state at startup
+        self.hardware.reset_hardware()
 
     def _setup_dashboard(self):
         # Title
@@ -1466,6 +1717,12 @@ class AdminGUI:
             actions_frame,
             text="Toggle Validity",
             command=self._toggle_card_validity
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            actions_frame,
+            text="Delete Card",
+            command=self._delete_card
         ).pack(side=tk.LEFT, padx=5)
         
         # Initial load of cards
@@ -1636,18 +1893,66 @@ class AdminGUI:
         logger.log_audit("lock_disengaged", {"method": "manual", "user": "admin"})
 
     def _test_valid_access(self):
+        # Find a valid card in the database
+        cards = self.db.get_all_cards()
+        valid_card_id = None
+        
+        for card in cards:
+            if card['is_valid']:
+                valid_card_id = card['id']
+                break
+                
+        if not valid_card_id:
+            # If no valid cards found, create a temporary one
+            valid_card_id = "04010203040506"
+            self.db.add_card(
+                card_id=valid_card_id,
+                name="Test User",
+                faculty="Test Faculty",
+                program="Test Program",
+                level="Test Level",
+                student_id="TEST123",
+                email="test@example.com",
+                expiry_date=(datetime.now() + timedelta(days=365)).isoformat(),
+                is_valid=1
+            )
+            
         # Simulate valid card scan
-        print("Admin: Simulating valid card scan for ID 04010203040506")
-        self.nfc_reader.simulate_card_read("04010203040506")
+        print(f"Admin: Simulating valid card scan for ID {valid_card_id}")
+        self.nfc_reader.simulate_card_read(valid_card_id)
         self.status_bar.config(text="Test valid access initiated")
-        logger.log_audit("test_access", {"status": "GRANTED", "card_id": "04010203040506"})
+        logger.log_audit("test_access", {"status": "GRANTED", "card_id": valid_card_id})
 
     def _test_invalid_access(self):
+        # Find an invalid card in the database
+        cards = self.db.get_all_cards()
+        invalid_card_id = None
+        
+        for card in cards:
+            if not card['is_valid']:
+                invalid_card_id = card['id']
+                break
+                
+        if not invalid_card_id:
+            # If no invalid cards found, create a temporary one
+            invalid_card_id = "040C0D0E0F1011"
+            self.db.add_card(
+                card_id=invalid_card_id,
+                name="Invalid User",
+                faculty="Test Faculty",
+                program="Test Program",
+                level="Test Level",
+                student_id="INVALID123",
+                email="invalid@example.com",
+                expiry_date=(datetime.now() - timedelta(days=10)).isoformat(),
+                is_valid=0
+            )
+            
         # Simulate invalid card scan
-        print("Admin: Simulating invalid card scan for ID 040C0D0E0F1011")
-        self.nfc_reader.simulate_card_read("040C0D0E0F1011")
+        print(f"Admin: Simulating invalid card scan for ID {invalid_card_id}")
+        self.nfc_reader.simulate_card_read(invalid_card_id)
         self.status_bar.config(text="Test invalid access initiated")
-        logger.log_audit("test_access", {"status": "DENIED", "card_id": "040C0D0E0F1011"})
+        logger.log_audit("test_access", {"status": "DENIED", "card_id": invalid_card_id})
 
     def _restart_nfc(self):
         # Restart the NFC reader
@@ -1659,10 +1964,7 @@ class AdminGUI:
 
     def _reset_hardware(self):
         # Reset all hardware components
-        self.hardware.close_gate()
-        self.hardware.engage_lock()
-        self.hardware.set_green_led(False)
-        self.hardware.set_red_led(False)
+        self.hardware.reset_hardware()
         self.status_bar.config(text="Hardware reset")
         logger.log_audit("hardware_reset", {"user": "admin"})
 
@@ -1690,28 +1992,55 @@ class AdminGUI:
         self.status_bar.config(text=f"Loaded {len(cards)} cards")
 
     def _add_card_dialog(self):
-        # This would open a dialog to add a new card
-        messagebox.showinfo("Add Card", "This feature would allow adding a new card")
+        dialog = CardRegistrationDialog(self.root, self.db)
+        if dialog.show():
+            self._refresh_cards()
 
     def _edit_card_dialog(self):
-        # This would open a dialog to edit the selected card
         selected = self.cards_tree.selection()
         if not selected:
             messagebox.showinfo("Edit Card", "Please select a card to edit")
             return
             
         card_id = self.cards_tree.item(selected[0], "values")[0]
-        messagebox.showinfo("Edit Card", f"This feature would allow editing card {card_id}")
+        dialog = CardRegistrationDialog(self.root, self.db, card_id)
+        if dialog.show():
+            self._refresh_cards()
 
     def _toggle_card_validity(self):
-        # This would toggle the validity of the selected card
         selected = self.cards_tree.selection()
         if not selected:
             messagebox.showinfo("Toggle Validity", "Please select a card to toggle")
             return
             
         card_id = self.cards_tree.item(selected[0], "values")[0]
-        messagebox.showinfo("Toggle Validity", f"This feature would toggle validity for card {card_id}")
+        is_valid = self.cards_tree.item(selected[0], "values")[6] == "Yes"
+        
+        # Toggle validity
+        if self.db.update_card_validity(card_id, not is_valid):
+            self._refresh_cards()
+            status = "disabled" if is_valid else "enabled"
+            self.status_bar.config(text=f"Card {card_id} {status}")
+            logger.log_audit("card_validity_changed", {"card_id": card_id, "is_valid": not is_valid})
+        else:
+            messagebox.showerror("Error", f"Failed to update card {card_id}")
+            
+    def _delete_card(self):
+        selected = self.cards_tree.selection()
+        if not selected:
+            messagebox.showinfo("Delete Card", "Please select a card to delete")
+            return
+            
+        card_id = self.cards_tree.item(selected[0], "values")[0]
+        
+        # Confirm deletion
+        if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete card {card_id}?"):
+            if self.db.delete_card(card_id):
+                self._refresh_cards()
+                self.status_bar.config(text=f"Card {card_id} deleted")
+                logger.log_audit("card_deleted", {"card_id": card_id})
+            else:
+                messagebox.showerror("Error", f"Failed to delete card {card_id}")
 
     def _update_logs(self):
         # Get recent logs and update the logs text area
@@ -1785,6 +2114,9 @@ class SmartEntrySystem:
         
         # Start NFC reader
         self.nfc_reader.start_reading()
+        
+        # Ensure lock is engaged at startup
+        self.hardware.engage_lock()
         
         # Start main processing loop
         self.process_loop()
