@@ -747,14 +747,9 @@ class NFCReader:
     def _mock_reader_loop(self) -> None:
         print("Mock mode: Starting simulated card reader")
         while not self.stop_event.is_set():
-            time.sleep(3)  # Simulate card read every 3 seconds
-            if not self.stop_event.is_set():
-                print("Mock mode: Simulating card read")
-                # Use a demo card ID
-                self.card_id = "04010203040506"
-                self.card_detected_event.set()
-                time.sleep(1)
-                self.card_detected_event.clear()
+            # In mock mode, we don't automatically simulate card reads
+            # We only wait for manual triggering through the wait_for_card method
+            time.sleep(0.5)
 
     def wait_for_card(self, timeout: float = None) -> Optional[str]:
         if self.card_detected_event.wait(timeout):
@@ -771,6 +766,13 @@ class NFCReader:
         if self.card_id:
             return {"id": self.card_id}
         return None
+        
+    def simulate_card_read(self, card_id: str) -> None:
+        """Manually simulate a card read (for testing only)"""
+        self.card_id = card_id
+        self.card_detected_event.set()
+        time.sleep(0.5)  # Brief delay
+        self.card_detected_event.clear()
 
 class HardwareController:
     def __init__(self, config_obj: Config) -> None:
@@ -797,9 +799,7 @@ class HardwareController:
             
             # Initialize servo
             self.servo = GPIO.PWM(self.config.SERVO_PIN, 50)  # 50Hz frequency
-            self.servo.start(self.config.SERVO_CLOSE_DUTY)
-            time.sleep(0.5)  # Allow servo to move to initial position
-            self.servo.ChangeDutyCycle(0)  # Stop the servo to prevent jitter
+            self.servo.start(0)  # Start with 0 duty cycle (no movement)
             
             # Initialize LEDs (off by default)
             GPIO.output(self.config.LED_GREEN_PIN, GPIO.LOW)
@@ -821,9 +821,10 @@ class HardwareController:
             return
         
         try:
+            # Only change duty cycle when needed
             self.servo.ChangeDutyCycle(self.config.SERVO_OPEN_DUTY)
             time.sleep(self.config.SERVO_DELAY)
-            # Stop PWM to prevent jitter
+            # Stop PWM to prevent jitter and continuous rotation
             self.servo.ChangeDutyCycle(0)
         except Exception as e:
             logger.log_error(e, "Failed to open gate")
@@ -834,9 +835,10 @@ class HardwareController:
             return
         
         try:
+            # Only change duty cycle when needed
             self.servo.ChangeDutyCycle(self.config.SERVO_CLOSE_DUTY)
             time.sleep(self.config.SERVO_DELAY)
-            # Stop PWM to prevent jitter
+            # Stop PWM to prevent jitter and continuous rotation
             self.servo.ChangeDutyCycle(0)
         except Exception as e:
             logger.log_error(e, "Failed to close gate")
@@ -1046,8 +1048,9 @@ class AccessController:
         
         if status == AccessStatus.GRANTED:
             # Successful access - turn on green LED, sound success buzzer
-            self.hardware.set_green_led(True)
+            # Make sure red LED is off first
             self.hardware.set_red_led(False)
+            self.hardware.set_green_led(True)
             self.hardware.sound_buzzer(duration=0.5, success=True)
             
             # Open gate and disengage lock
@@ -1067,6 +1070,7 @@ class AccessController:
             
         elif status in (AccessStatus.DENIED, AccessStatus.BLACKLISTED):
             # Failed access - turn on red LED, sound error buzzer
+            # Make sure green LED is off first
             self.hardware.set_green_led(False)
             self.hardware.set_red_led(True)
             self.hardware.sound_buzzer(duration=0.5, success=False)
@@ -1279,10 +1283,11 @@ class SmallScreenGUI:
             self.root.mainloop()
 
 class AdminGUI:
-    def __init__(self, db, hardware, access_controller):
+    def __init__(self, db, hardware, access_controller, nfc_reader):
         self.db = db
         self.hardware = hardware
         self.access_controller = access_controller
+        self.nfc_reader = nfc_reader
         
         self.root = Tk()
         self.root.title("SMART ENTRY Admin Interface")
@@ -1632,20 +1637,23 @@ class AdminGUI:
 
     def _test_valid_access(self):
         # Simulate valid card scan
-        print("Demo: Simulating card read for ID 04010203040506")
-        status, card_data = self.access_controller.handle_access("04010203040506")
-        self.status_bar.config(text=f"Test valid access: {status.name}")
-        logger.log_audit("test_access", {"status": status.name, "card_id": "04010203040506"})
+        print("Admin: Simulating valid card scan for ID 04010203040506")
+        self.nfc_reader.simulate_card_read("04010203040506")
+        self.status_bar.config(text="Test valid access initiated")
+        logger.log_audit("test_access", {"status": "GRANTED", "card_id": "04010203040506"})
 
     def _test_invalid_access(self):
         # Simulate invalid card scan
-        print("Demo: Simulating card read for ID 040C0D0E0F1011")
-        status, card_data = self.access_controller.handle_access("040C0D0E0F1011")
-        self.status_bar.config(text=f"Test invalid access: {status.name}")
-        logger.log_audit("test_access", {"status": status.name, "card_id": "040C0D0E0F1011"})
+        print("Admin: Simulating invalid card scan for ID 040C0D0E0F1011")
+        self.nfc_reader.simulate_card_read("040C0D0E0F1011")
+        self.status_bar.config(text="Test invalid access initiated")
+        logger.log_audit("test_access", {"status": "DENIED", "card_id": "040C0D0E0F1011"})
 
     def _restart_nfc(self):
-        # This would restart the NFC reader in a real implementation
+        # Restart the NFC reader
+        self.nfc_reader.stop_reading()
+        time.sleep(1)
+        self.nfc_reader.start_reading()
         self.status_bar.config(text="NFC reader restarted")
         logger.log_audit("nfc_restart", {"user": "admin"})
 
@@ -1822,7 +1830,7 @@ class SmartEntrySystem:
             return False
             
         # Create and run admin GUI
-        self.admin_gui = AdminGUI(self.db, self.hardware, self.access_controller)
+        self.admin_gui = AdminGUI(self.db, self.hardware, self.access_controller, self.nfc_reader)
         self.admin_gui.run()
         return True
 
@@ -1830,7 +1838,7 @@ def main():
     # Setup credentials if needed
     Authenticator.setup_credentials_interactively()
     
-    # For demonstration, bypass authentication
+    # For demonstration, bypass authentication for GUI demonstration
     print("Bypassing authentication for GUI demonstration...")
     
     # Create and start the system
