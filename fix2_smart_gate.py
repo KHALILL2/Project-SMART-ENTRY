@@ -53,7 +53,8 @@ except (ImportError, RuntimeError):
             print(f"MockGPIO: Reading pin {pin}")
             return 0
         def cleanup(self, pin=None):
-            print(f"MockGPIO: Cleanup pin {pin if pin else 'all'}")        def add_event_detect(self, pin, edge, callback=None, bouncetime=None):
+            print(f"MockGPIO: Cleanup pin {pin if pin else 'all'}")
+        def add_event_detect(self, pin, edge, callback=None, bouncetime=None):
             print(f"MockGPIO: Add event detect on pin {pin} for edge {edge}")
         def remove_event_detect(self, pin):
             print(f"MockGPIO: Remove event detect on pin {pin}")
