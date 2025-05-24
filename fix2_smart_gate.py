@@ -38,39 +38,18 @@ except (ImportError, RuntimeError):
         OUT = 1
         LOW = 0
         HIGH = 1
-        PUD_UP = 22
-        PUD_DOWN = 21
-        FALLING = 32
-        RISING = 31
-        BOTH = 33
         def setmode(self, mode):
             print(f"MockGPIO: Set mode to {mode}")
-        def setup(self, pin, mode, pull_up_down=None):
-            print(f"MockGPIO: Setup pin {pin} to mode {mode} with pull_up_down={pull_up_down}")
+        def setup(self, pin, mode):
+            print(f"MockGPIO: Setup pin {pin} to mode {mode}")
         def output(self, pin, state):
             print(f"MockGPIO: Set pin {pin} to state {state}")
-        def input(self, pin):
-            print(f"MockGPIO: Reading pin {pin}")
-            return 0
         def cleanup(self, pin=None):
-            print(f"MockGPIO: Cleanup pin {pin if pin else 'all'}")
-        def add_event_detect(self, pin, edge, callback=None, bouncetime=None):
-            print(f"MockGPIO: Add event detect on pin {pin} for edge {edge}")
-        def remove_event_detect(self, pin):
-            print(f"MockGPIO: Remove event detect on pin {pin}")
-        class PWM:
-            def __init__(self, pin, freq):
-                print(f"MockGPIO: PWM created on pin {pin} with freq {freq}")
-            def start(self, duty):
-                print(f"MockGPIO: PWM start with duty {duty}")
-            def ChangeDutyCycle(self, duty):
-                print(f"MockGPIO: PWM change duty cycle to {duty}")
-            def stop(self):
-                print(f"MockGPIO: PWM stop")
+            print(f"MockGPIO: Cleanup pin {pin if pin else \"all\"}") # Original mock code kept as is
     GPIO = MockGPIO()
     GPIO_AVAILABLE = False
 
-from tkinter import Tk, Label, Button, messagebox, Entry, Toplevel, Text, END, Frame, BOTH, X, LEFT, RIGHT, TOP, BOTTOM, Y, Scrollbar
+from tkinter import Tk, Label, Button, messagebox, Entry, Toplevel, Text, END
 from tkinter import ttk
 import tkinter as tk
 from cryptography.fernet import Fernet, InvalidToken
@@ -249,13 +228,14 @@ class Config:
             self._create_default_config()
             logger.log_info(f"Created default config file: {self.CONFIG_FILE}")
         self.config.read(self.CONFIG_FILE)
-        try:
-            self.EMAIL_USER = keyring.get_password("nfc_gate", "email_user")
-            self.EMAIL_PASS = keyring.get_password("nfc_gate", "email_pass")
-        except Exception as e:
-            logger.log_error(e, "Failed to retrieve credentials from keyring")
-            self.EMAIL_USER = None
-            self.EMAIL_PASS = None
+        # REMOVED: Keyring access for email (not needed for core function)
+        # try:
+        #     self.EMAIL_USER = keyring.get_password("nfc_gate", "email_user")
+        #     self.EMAIL_PASS = keyring.get_password("nfc_gate", "email_pass")
+        # except Exception as e:
+        #     logger.log_error(e, "Failed to retrieve credentials from keyring")
+        #     self.EMAIL_USER = None
+        #     self.EMAIL_PASS = None
         self.EMAIL_HOST = self.config.get("email", "host", fallback="smtp.gmail.com")
         self.EMAIL_PORT = self.config.getint("email", "port", fallback=587)
         self.EMAIL_USE_TLS = self.config.getboolean("email", "use_tls", fallback=True)
@@ -263,7 +243,7 @@ class Config:
         self.SERVO_PIN = self._validate_pin(self.config.getint("gpio", "servo", fallback=18))
         self.FAN_PIN = self._validate_pin(self.config.getint("gpio", "fan", fallback=23))
         self.BUZZER_PIN = self._validate_pin(self.config.getint("gpio", "buzzer", fallback=24))
-        self.SOLENOID_PIN = self._validate_pin(self.config.getint("gpio", "solenoid", fallback=27))  # Changed to GPIO 27 as per user"s hardware setup
+        self.SOLENOID_PIN = self._validate_pin(self.config.getint("gpio", "solenoid", fallback=27))
         self.LED_GREEN_PIN = self._validate_pin(self.config.getint("gpio", "led_green", fallback=22))
         self.LED_RED_PIN = self._validate_pin(self.config.getint("gpio", "led_red", fallback=23))
         # MODIFIED: Use max/min duty cycles for servo
@@ -292,7 +272,7 @@ class Config:
             "servo": "18",
             "fan": "23",
             "buzzer": "24",
-            "solenoid": "27",  # Changed to GPIO 27 as per user"s hardware setup
+            "solenoid": "27",
             "led_green": "22",
             "led_red": "23"
         }
@@ -346,10 +326,11 @@ class ConfigValidator:
     @staticmethod
     def validate_config(config_obj: Config) -> bool:
         try:
-            if not config_obj.EMAIL_HOST or not config_obj.EMAIL_PORT:
-                raise ValueError("Email configuration incomplete")
-            if config_obj.EMAIL_USER is None or config_obj.EMAIL_PASS is None:
-                logger.log_info("Email user/pass not found in keyring")
+            # REMOVED: Email config check (not essential)
+            # if not config_obj.EMAIL_HOST or not config_obj.EMAIL_PORT:
+            #     raise ValueError("Email configuration incomplete")
+            # if config_obj.EMAIL_USER is None or config_obj.EMAIL_PASS is None:
+            #     logger.log_info("Email user/pass not found in keyring")
             for pin in [config_obj.SERVO_PIN, config_obj.FAN_PIN, config_obj.BUZZER_PIN, config_obj.SOLENOID_PIN,
                        config_obj.LED_GREEN_PIN, config_obj.LED_RED_PIN]:
                 if pin not in config_obj.VALID_PINS:
@@ -378,7 +359,51 @@ if not ConfigValidator.validate_config(config):
     # sys.exit(1) # Don"t exit in this environment
 
 # --- REMOVED Authenticator Class --- 
-# No longer needed as per user request
+# class Authenticator:
+#     SERVICE_NAME = "nfc_gate"
+#     ADMIN_USER_KEY = "admin_user"
+#     ADMIN_PASS_KEY = "admin_pass"
+# 
+#     @staticmethod
+#     def setup_credentials_interactively():
+#         try:
+#             if not keyring.get_password(Authenticator.SERVICE_NAME, Authenticator.ADMIN_USER_KEY):
+#                 print("Setting up admin credentials...")
+#                 username = input("Enter admin username: ")
+#                 password = input("Enter admin password: ")
+#                 keyring.set_password(Authenticator.SERVICE_NAME, Authenticator.ADMIN_USER_KEY, username)
+#                 keyring.set_password(Authenticator.SERVICE_NAME, Authenticator.ADMIN_PASS_KEY, password)
+#                 print("Admin credentials stored securely in keyring.")
+#         except Exception as e:
+#             logger.log_error(e, "Failed to setup credentials interactively")
+# 
+#     @staticmethod
+#     def authenticate():
+#         try:
+#             stored_user = keyring.get_password(Authenticator.SERVICE_NAME, Authenticator.ADMIN_USER_KEY)
+#             stored_pass = keyring.get_password(Authenticator.SERVICE_NAME, Authenticator.ADMIN_PASS_KEY)
+#         except Exception as e:
+#             logger.log_error(e, "Failed to retrieve credentials")
+#             messagebox.showerror("Authentication Error", "Could not retrieve credentials")
+#             return False
+#         if not stored_user or not stored_pass:
+#             messagebox.showerror("Setup Required", "Admin credentials not set")
+#             return False
+# 
+#         login_window = LoginWindow()
+#         if login_window.show():
+#             entered_user = login_window.username
+#             entered_pass = login_window.password
+#             if entered_user == stored_user and entered_pass == stored_pass:
+#                 logger.log_info("Admin authentication successful")
+#                 return True
+#             else:
+#                 messagebox.showerror("Authentication Failed", "Invalid username or password")
+#                 logger.log_audit("login_fail", {"username": entered_user})
+#                 return False
+#         else:
+#             # Login cancelled
+#             return False
 
 class DatabaseManager:
     def __init__(self, db_path: str, encrypted: bool = True):
@@ -398,12 +423,12 @@ class DatabaseManager:
             return key
 
     def _encrypt(self, data: str) -> str:
-        if self.fernet:
+        if self.fernet and data is not None:
             return self.fernet.encrypt(data.encode()).decode()
         return data
 
     def _decrypt(self, data: str) -> str:
-        if self.fernet:
+        if self.fernet and data is not None:
             try:
                 return self.fernet.decrypt(data.encode()).decode()
             except InvalidToken:
@@ -536,8 +561,8 @@ class HardwareController:
         if self.servo:
             try:
                 logger.log_info("Opening gate")
-                # MODIFIED: Use max duty cycle directly
-                self.servo.ChangeDutyCycle(12.5) 
+                # Use configured max duty cycle
+                self.servo.ChangeDutyCycle(self.config.SERVO_OPEN_DUTY) 
                 time.sleep(self.config.SERVO_DELAY)
                 self.servo.ChangeDutyCycle(0) # Stop PWM to prevent jitter
             except Exception as e:
@@ -547,8 +572,8 @@ class HardwareController:
         if self.servo:
             try:
                 logger.log_info("Closing gate")
-                # MODIFIED: Use min duty cycle directly
-                self.servo.ChangeDutyCycle(2.5) 
+                # Use configured min duty cycle
+                self.servo.ChangeDutyCycle(self.config.SERVO_CLOSE_DUTY) 
                 time.sleep(self.config.SERVO_DELAY)
                 self.servo.ChangeDutyCycle(0) # Stop PWM to prevent jitter
             except Exception as e:
@@ -1490,7 +1515,52 @@ class AdminGUI:
         self.root.mainloop()
 
 # --- REMOVED LoginWindow Class --- 
-# No longer needed as per user request
+# class LoginWindow:
+#     def __init__(self):
+#         self.root = Toplevel()
+#         self.root.title("Admin Login")
+#         self.root.geometry("300x150")
+#         self.root.transient()
+#         self.root.grab_set()
+#         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
+#         
+#         self.username = ""
+#         self.password = ""
+#         self.result = False
+#         
+#         frame = ttk.Frame(self.root, padding=10)
+#         frame.pack(fill=tk.BOTH, expand=True)
+#         
+#         ttk.Label(frame, text="Username:").grid(row=0, column=0, sticky=tk.W, pady=5)
+#         self.user_entry = ttk.Entry(frame, width=25)
+#         self.user_entry.grid(row=0, column=1, pady=5)
+#         
+#         ttk.Label(frame, text="Password:").grid(row=1, column=0, sticky=tk.W, pady=5)
+#         self.pass_entry = ttk.Entry(frame, width=25, show="*")
+#         self.pass_entry.grid(row=1, column=1, pady=5)
+#         
+#         button_frame = ttk.Frame(frame)
+#         button_frame.grid(row=2, column=0, columnspan=2, pady=10)
+#         
+#         ttk.Button(button_frame, text="Login", command=self._login).pack(side=tk.LEFT, padx=5)
+#         ttk.Button(button_frame, text="Cancel", command=self._cancel).pack(side=tk.LEFT, padx=5)
+#         
+#         self.user_entry.focus_set()
+#         self.root.bind("<Return>", lambda event: self._login())
+# 
+#     def _login(self):
+#         self.username = self.user_entry.get()
+#         self.password = self.pass_entry.get()
+#         self.result = True
+#         self.root.destroy()
+# 
+#     def _cancel(self):
+#         self.result = False
+#         self.root.destroy()
+# 
+#     def show(self):
+#         self.root.wait_window()
+#         return self.result
 
 class NFCSystem:
     def __init__(self):
@@ -1576,9 +1646,22 @@ class NFCSystem:
         logger.log_info("System stopped")
 
 def main():
-    # --- REMOVED Authentication Setup --- 
+    # --- REMOVED Authentication Setup and Call --- 
     # Authenticator.setup_credentials_interactively()
+    # if Authenticator.authenticate(): # REMOVED
+    #     system = NFCSystem()
+    #     try:
+    #         system.start()
+    #     except KeyboardInterrupt:
+    #         print("\nCtrl+C detected. Shutting down...")
+    #     except Exception as e:
+    #         logger.log_error(e, "Unhandled exception in main loop")
+    #     finally:
+    #         system.stop()
+    # else:
+    #     print("Authentication failed. Exiting.")
     
+    # MODIFIED: Start system directly
     system = NFCSystem()
     try:
         system.start()
