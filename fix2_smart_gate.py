@@ -275,8 +275,8 @@ class Config:
             'led_red': '23'
         }
         default_config['servo'] = {
-            'open': '12.5',  # Updated to maximize rotation
-            'close': '2.5',  # Updated to minimize rotation
+            'open': '7.5',
+            'close': '2.5',
             'delay': '1.5'
         }
         default_config['temperature'] = {
