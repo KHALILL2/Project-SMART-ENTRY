@@ -45,7 +45,7 @@ except (ImportError, RuntimeError):
         def output(self, pin, state):
             print(f"MockGPIO: Set pin {pin} to state {state}")
         def cleanup(self, pin=None):
-            print(f"MockGPIO: Cleanup pin {pin if pin else \"all\"}") # Original mock code kept as is
+            print(f"MockGPIO: Cleanup pin {pin if pin else 'all'}") # Original mock code kept as is
     GPIO = MockGPIO()
     GPIO_AVAILABLE = False
 
