@@ -8,6 +8,12 @@ import random
 import sqlite3
 import datetime
 import threading
+import psutil
+import RPi.GPIO as GPIO
+from adafruit_pn532.i2c import PN532_I2C
+import busio
+import board
+from adafruit_servokit import ServoKit
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFrame, QStackedWidget, QDialog, QLineEdit,
@@ -18,6 +24,360 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtMultimedia import QSound
 
 from flask import Flask, render_template, jsonify
+from flask_caching import Cache
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+class PowerManagement:
+    """Manages system power consumption and performance optimization"""
+    
+    def __init__(self):
+        self.power_mode = "normal"  # normal, power_save, performance
+        self.cpu_threshold = 80  # CPU usage threshold for power saving
+        self.memory_threshold = 70  # Memory usage threshold for power saving
+        self.battery_threshold = 20  # Battery level threshold for power saving
+        self.last_optimization = time.time()
+        self.optimization_interval = 300  # 5 minutes
+        
+        # Start monitoring thread
+        self.monitor_thread = threading.Thread(target=self._monitor_resources, daemon=True)
+        self.monitor_thread.start()
+    
+    def _monitor_resources(self):
+        """Monitor system resources and adjust power mode accordingly"""
+        while True:
+            try:
+                # Get system metrics
+                cpu_percent = psutil.cpu_percent(interval=1)
+                memory_percent = psutil.virtual_memory().percent
+                
+                # Check if optimization is needed
+                current_time = time.time()
+                if current_time - self.last_optimization >= self.optimization_interval:
+                    self._optimize_system(cpu_percent, memory_percent)
+                    self.last_optimization = current_time
+                
+                # Adjust power mode based on conditions
+                if (cpu_percent > self.cpu_threshold or 
+                    memory_percent > self.memory_threshold):
+                    self.set_power_mode("power_save")
+                else:
+                    self.set_power_mode("normal")
+                
+                time.sleep(60)  # Check every minute
+                
+            except Exception as e:
+                print(f"Error in power management: {e}")
+                time.sleep(60)
+    
+    def _optimize_system(self, cpu_percent, memory_percent):
+        """Optimize system resources"""
+        try:
+            # Clear memory cache if memory usage is high
+            if memory_percent > self.memory_threshold:
+                self._clear_memory_cache()
+            
+            # Optimize database if needed
+            self._optimize_database()
+            
+            # Log optimization
+            print(f"System optimized - CPU: {cpu_percent}%, Memory: {memory_percent}%")
+            
+        except Exception as e:
+            print(f"Error during system optimization: {e}")
+    
+    def _clear_memory_cache(self):
+        """Clear system memory cache"""
+        try:
+            os.system('sync')  # Flush filesystem buffers
+            os.system('echo 3 > /proc/sys/vm/drop_caches')  # Clear page cache, dentries and inodes
+        except:
+            pass
+    
+    def _optimize_database(self):
+        """Optimize SQLite database"""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            # Run VACUUM to optimize database
+            cursor.execute("VACUUM")
+            
+            # Analyze tables for better query planning
+            cursor.execute("ANALYZE")
+            
+            conn.commit()
+            conn.close()
+        except:
+            pass
+    
+    def set_power_mode(self, mode):
+        """Set system power mode"""
+        if mode != self.power_mode:
+            self.power_mode = mode
+            self._apply_power_mode()
+    
+    def _apply_power_mode(self):
+        """Apply power mode settings"""
+        if self.power_mode == "power_save":
+            # Reduce CPU frequency
+            os.system('echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor')
+            
+            # Disable unnecessary services
+            self._disable_non_essential_services()
+            
+        elif self.power_mode == "normal":
+            # Restore normal settings
+            os.system('echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor')
+            
+            # Enable essential services
+            self._enable_essential_services()
+    
+    def _disable_non_essential_services(self):
+        """Disable non-essential services in power save mode"""
+        # Add service management logic here
+        pass
+    
+    def _enable_essential_services(self):
+        """Enable essential services in normal mode"""
+        # Add service management logic here
+        pass
+
+# Create global power management instance
+power_manager = PowerManagement()
+
+class HardwareController:
+    """Controls all hardware components connected to Raspberry Pi"""
+    
+    def __init__(self):
+        # GPIO Setup
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        
+        # Pin Definitions
+        self.RED_LED_PIN = 24      # GPIO24 PIN18
+        self.GREEN_LED_PIN = 23    # GPIO23 PIN16
+        self.RELAY_PIN = 17        # GPIO17 PIN11
+        
+        # Servo Parameters for Three-Arm Gate
+        self.SERVO_CHANNEL = 0     # Channel 0 for the servo
+        self.SERVO_MIN_PULSE = 500  # Minimum pulse length (µs)
+        self.SERVO_MAX_PULSE = 2500 # Maximum pulse length (µs)
+        self.SERVO_FREQ = 50       # 50Hz frequency
+        self.SERVO_SPEED = 0.3     # Speed in seconds per 90 degrees
+        self.SERVO_STEPS = 20      # Steps for smooth movement
+        
+        # Three-arm gate angles (120 degrees between each arm)
+        self.SERVO_CLOSED_ANGLE = 0    # First arm position
+        self.SERVO_OPEN_ANGLE = 120    # Rotate 120 degrees to next arm
+        self.SERVO_FULL_ROTATION = 360 # Full rotation for reference
+        
+        # Setup GPIO pins
+        GPIO.setup(self.RED_LED_PIN, GPIO.OUT)
+        GPIO.setup(self.GREEN_LED_PIN, GPIO.OUT)
+        GPIO.setup(self.RELAY_PIN, GPIO.OUT)
+        
+        # Initialize PWM for LEDs
+        self.red_led_pwm = GPIO.PWM(self.RED_LED_PIN, 100)  # 100 Hz
+        self.green_led_pwm = GPIO.PWM(self.GREEN_LED_PIN, 100)
+        self.red_led_pwm.start(0)
+        self.green_led_pwm.start(0)
+        
+        # Initialize I2C for PN532 NFC reader
+        self.i2c = busio.I2C(board.SCL, board.SDA)
+        self.pn532 = PN532_I2C(self.i2c, debug=False)
+        
+        # Initialize servo controller with custom parameters for three-arm gate
+        self.servo_kit = ServoKit(channels=16, frequency=self.SERVO_FREQ)
+        self.servo = self.servo_kit.servo[self.SERVO_CHANNEL]
+        self.servo.set_pulse_width_range(self.SERVO_MIN_PULSE, self.SERVO_MAX_PULSE)
+        
+        # Set initial states
+        self.gate_closed = True
+        self.led_off()
+        self.relay_off()
+        
+        # Start NFC scanning thread
+        self.nfc_thread = threading.Thread(target=self._scan_nfc, daemon=True)
+        self.nfc_thread.start()
+    
+    def _scan_nfc(self):
+        """Continuously scan for NFC cards"""
+        while True:
+            try:
+                # Check if a card is available to read
+                uid = self.pn532.read_passive_target(timeout=0.5)
+                
+                if uid is not None:
+                    # Convert UID to string
+                    card_id = ''.join([hex(i)[2:].upper() for i in uid])
+                    print(f"Found card with UID: {card_id}")
+                    
+                    # Process card scan
+                    self._process_card_scan(card_id)
+                    
+                    # Wait a bit before next scan
+                    time.sleep(1)
+            except Exception as e:
+                print(f"Error scanning NFC: {e}")
+                time.sleep(1)
+    
+    def _process_card_scan(self, card_id):
+        """Process NFC card scan"""
+        # Get student data
+        student_data = get_student_by_card(card_id)
+        
+        if student_data and student_data.get("valid", False):
+            # Valid card
+            self.green_led_on()
+            self.green_buzzer_on()
+            self.open_gate()
+            
+            # Log successful entry
+            log_entry(card_id, student_data.get("id", "UNKNOWN"), "success")
+            
+            # Close gate after delay
+            threading.Timer(5, self.close_gate).start()
+        else:
+            # Invalid card
+            self.red_led_on()
+            self.red_buzzer_on()
+            
+            # Log failed entry
+            log_entry(card_id, "UNKNOWN", "failure")
+            
+            # Trigger alarm
+            self.trigger_alarm()
+    
+    def open_gate(self):
+        """Open the gate using servo with controlled speed and increased torque"""
+        if self.gate_closed:
+            try:
+                # Activate relay with delay to ensure stable power
+                time.sleep(0.2)
+                self.relay_on()
+                time.sleep(0.2)  # Wait for relay to stabilize
+                
+                # Calculate steps for smooth movement with heavy load
+                current_angle = self.servo.angle if self.servo.angle is not None else self.SERVO_CLOSED_ANGLE
+                angle_step = (self.SERVO_OPEN_ANGLE - current_angle) / self.SERVO_STEPS
+                delay = self.SERVO_SPEED / self.SERVO_STEPS
+                
+                # Move servo smoothly with increased torque
+                for i in range(self.SERVO_STEPS):
+                    target_angle = current_angle + (angle_step * (i + 1))
+                    self.servo.angle = target_angle
+                    time.sleep(delay)
+                
+                # Hold position briefly to ensure stability
+                time.sleep(0.5)
+                
+                self.gate_closed = False
+                print("Gate opened")
+            except Exception as e:
+                print(f"Error opening gate: {e}")
+                # Ensure relay is off in case of error
+                self.relay_off()
+    
+    def close_gate(self):
+        """Close the gate using servo with controlled speed and increased torque"""
+        if not self.gate_closed:
+            try:
+                # Calculate steps for smooth movement with heavy load
+                current_angle = self.servo.angle if self.servo.angle is not None else self.SERVO_OPEN_ANGLE
+                angle_step = (self.SERVO_CLOSED_ANGLE - current_angle) / self.SERVO_STEPS
+                delay = self.SERVO_SPEED / self.SERVO_STEPS
+                
+                # Move servo smoothly with increased torque
+                for i in range(self.SERVO_STEPS):
+                    target_angle = current_angle + (angle_step * (i + 1))
+                    self.servo.angle = target_angle
+                    time.sleep(delay)
+                
+                # Hold position briefly to ensure stability
+                time.sleep(0.5)
+                
+                # Deactivate relay after servo movement
+                self.relay_off()
+                
+                self.gate_closed = True
+                print("Gate closed")
+            except Exception as e:
+                print(f"Error closing gate: {e}")
+                # Ensure relay is off in case of error
+                self.relay_off()
+    
+    def green_led_on(self):
+        """Turn on green LED"""
+        GPIO.output(self.GREEN_LED_PIN, GPIO.HIGH)
+    
+    def green_led_off(self):
+        """Turn off green LED"""
+        GPIO.output(self.GREEN_LED_PIN, GPIO.LOW)
+    
+    def red_led_on(self):
+        """Turn on red LED"""
+        GPIO.output(self.RED_LED_PIN, GPIO.HIGH)
+    
+    def red_led_off(self):
+        """Turn off red LED"""
+        GPIO.output(self.RED_LED_PIN, GPIO.LOW)
+    
+    def led_off(self):
+        """Turn off all LEDs"""
+        self.green_led_off()
+        self.red_led_off()
+    
+    def green_buzzer_on(self):
+        """Turn on green buzzer"""
+        self.green_buzzer_pwm.ChangeDutyCycle(50)  # 50% duty cycle
+    
+    def green_buzzer_off(self):
+        """Turn off green buzzer"""
+        self.green_buzzer_pwm.ChangeDutyCycle(0)
+    
+    def red_buzzer_on(self):
+        """Turn on red buzzer"""
+        self.red_buzzer_pwm.ChangeDutyCycle(50)  # 50% duty cycle
+    
+    def red_buzzer_off(self):
+        """Turn off red buzzer"""
+        self.red_buzzer_pwm.ChangeDutyCycle(0)
+    
+    def buzzer_off(self):
+        """Turn off all buzzers"""
+        self.green_buzzer_off()
+        self.red_buzzer_off()
+    
+    def relay_on(self):
+        """Turn on relay"""
+        GPIO.output(self.RELAY_PIN, GPIO.HIGH)
+    
+    def relay_off(self):
+        """Turn off relay"""
+        GPIO.output(self.RELAY_PIN, GPIO.LOW)
+    
+    def trigger_alarm(self):
+        """Trigger alarm sequence"""
+        def alarm_sequence():
+            for _ in range(3):  # 3 beeps
+                self.red_buzzer_on()
+                time.sleep(0.5)
+                self.red_buzzer_off()
+                time.sleep(0.5)
+        
+        threading.Thread(target=alarm_sequence, daemon=True).start()
+    
+    def cleanup(self):
+        """Cleanup GPIO and hardware resources"""
+        self.led_off()
+        self.buzzer_off()
+        self.relay_off()
+        self.red_buzzer_pwm.stop()
+        self.green_buzzer_pwm.stop()
+        GPIO.cleanup()
+
+# Create global hardware controller instance
+hardware_controller = HardwareController()
 
 # Gate Control and Alarm System
 class GateController:
@@ -28,93 +388,33 @@ class GateController:
         self.is_alarm_active = False
         self.alarm_thread = None
         self.alarm_stop_event = threading.Event()
-        
-        # Load alarm sound
-        self.alarm_sound = QSound("assets/alarm.wav")
-        
-        # Create alarm sound if it doesn't exist
-        if not os.path.exists("assets/alarm.wav"):
-            self.create_alarm_sound()
-    
-    def create_alarm_sound(self):
-        """Create a simple alarm sound file"""
-        try:
-            from scipy.io import wavfile
-            import numpy as np
-            
-            # Create a simple alarm sound (1 second of alternating high/low tones)
-            sample_rate = 44100
-            duration = 1.0
-            t = np.linspace(0, duration, int(sample_rate * duration), False)
-            
-            # Generate alternating tones
-            tone1 = np.sin(2 * np.pi * 880 * t)  # A5 note
-            tone2 = np.sin(2 * np.pi * 440 * t)  # A4 note
-            
-            # Combine tones
-            alarm_sound = np.zeros_like(t)
-            for i in range(len(t)):
-                if i % 2 == 0:
-                    alarm_sound[i] = tone1[i]
-                else:
-                    alarm_sound[i] = tone2[i]
-            
-            # Normalize and convert to 16-bit PCM
-            alarm_sound = np.int16(alarm_sound * 32767)
-            
-            # Save the sound file
-            os.makedirs("assets", exist_ok=True)
-            wavfile.write("assets/alarm.wav", sample_rate, alarm_sound)
-            
-        except ImportError:
-            print("Warning: Could not create alarm sound file. Install scipy for sound generation.")
     
     def open_gate(self):
         """Open the gate"""
         if not self.is_open:
-            print("Opening gate...")
-            # In a real implementation, this would control a servo or motor
+            hardware_controller.open_gate()
             self.is_open = True
-            # Simulate gate opening delay
-            time.sleep(1)
-            print("Gate opened")
     
     def close_gate(self):
         """Close the gate"""
         if self.is_open:
-            print("Closing gate...")
-            # In a real implementation, this would control a servo or motor
+            hardware_controller.close_gate()
             self.is_open = False
-            # Simulate gate closing delay
-            time.sleep(1)
-            print("Gate closed")
     
     def trigger_alarm(self):
         """Trigger the alarm system"""
         if not self.is_alarm_active:
             self.is_alarm_active = True
-            self.alarm_stop_event.clear()
-            self.alarm_thread = threading.Thread(target=self._alarm_loop, daemon=True)
-            self.alarm_thread.start()
-            print("Alarm triggered!")
+            hardware_controller.trigger_alarm()
     
     def stop_alarm(self):
         """Stop the alarm system"""
         if self.is_alarm_active:
             self.is_alarm_active = False
-            self.alarm_stop_event.set()
-            if self.alarm_thread:
-                self.alarm_thread.join(timeout=1)
-            print("Alarm stopped")
-    
-    def _alarm_loop(self):
-        """Alarm sound loop"""
-        while not self.alarm_stop_event.is_set():
-            self.alarm_sound.play()
-            time.sleep(1)  # Wait for sound to finish
-            if self.alarm_stop_event.is_set():
-                break
-            time.sleep(0.1)  # Small pause between sounds
+            hardware_controller.buzzer_off()
+
+# Create global gate controller instance
+gate_controller = GateController()
 
 # Ensure directories exist
 os.makedirs("assets", exist_ok=True)
@@ -123,177 +423,257 @@ os.makedirs("templates", exist_ok=True)
 os.makedirs("static/css", exist_ok=True)
 os.makedirs("static/js", exist_ok=True)
 
-# Create global gate controller instance
-gate_controller = GateController()
-
 # Database setup
 DB_PATH = "database/smart_gate.db"
 
+class DatabasePool:
+    """Database connection pool for optimized database access"""
+    
+    def __init__(self, max_connections=5):
+        self.max_connections = max_connections
+        self.connections = []
+        self.lock = threading.Lock()
+        
+        # Create initial connections
+        for _ in range(max_connections):
+            conn = self._create_connection()
+            if conn:
+                self.connections.append(conn)
+    
+    def _create_connection(self):
+        """Create a new database connection with optimized settings"""
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
+            conn.execute("PRAGMA synchronous=NORMAL")  # Faster writes with reasonable safety
+            conn.execute("PRAGMA cache_size=-2000")  # Use 2MB of cache
+            conn.execute("PRAGMA temp_store=MEMORY")  # Store temp tables and indices in memory
+            conn.execute("PRAGMA mmap_size=30000000000")  # Use memory-mapped I/O
+            conn.execute("PRAGMA page_size=4096")  # Optimal page size
+            return conn
+        except Exception as e:
+            print(f"Error creating database connection: {e}")
+            return None
+    
+    def get_connection(self):
+        """Get a connection from the pool"""
+        with self.lock:
+            if self.connections:
+                return self.connections.pop()
+            return self._create_connection()
+    
+    def return_connection(self, conn):
+        """Return a connection to the pool"""
+        with self.lock:
+            if len(self.connections) < self.max_connections:
+                self.connections.append(conn)
+            else:
+                conn.close()
+    
+    def close_all(self):
+        """Close all connections in the pool"""
+        with self.lock:
+            for conn in self.connections:
+                conn.close()
+            self.connections.clear()
+
+# Create global database pool
+db_pool = DatabasePool()
+
+def get_db_connection():
+    """Get a database connection from the pool"""
+    return db_pool.get_connection()
+
 def setup_database():
     """Initialize the SQLite database with required tables"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Create students table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS students (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        faculty TEXT,
-        program TEXT,
-        level TEXT,
-        image_path TEXT
-    )
-    """)
-    
-    # Create cards table with card_type field
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS cards (
-        card_id TEXT PRIMARY KEY,
-        student_id TEXT NOT NULL,
-        is_active INTEGER DEFAULT 1,
-        card_type TEXT DEFAULT "student",
-        FOREIGN KEY (student_id) REFERENCES students(id)
-    )
-    """)
-    
-    # Create entry_logs table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS entry_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        card_id TEXT,
-        student_id TEXT,
-        timestamp TEXT NOT NULL,
-        gate TEXT DEFAULT "Main Gate",
-        status TEXT NOT NULL,
-        entry_type TEXT DEFAULT "regular",
-        FOREIGN KEY (card_id) REFERENCES cards(card_id),
-        FOREIGN KEY (student_id) REFERENCES students(id)
-    )
-    """)
-    
-    # Insert sample data for testing
+    conn = get_db_connection()
     try:
-        # Sample students
-        cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("20210001", "John Smith", "Engineering", "Computer Engineering", "3rd Year", "assets/student1.png"))
-        cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("20210002", "Sarah Johnson", "Science", "Physics", "2nd Year", "assets/student2.png"))
-        cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("20210003", "Mohammed Ali", "Medicine", "General Medicine", "4th Year", "assets/student3.png"))
-        cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("SECURITY001", "Security Staff", "Security", "Gate Security", "Staff", "assets/security_staff.png"))
+        cursor = conn.cursor()
         
-        # Sample cards
-        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
-                      ("A1B2C3D4", "20210001", 1, "student"))
-        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
-                      ("E5F6G7H8", "20210002", 1, "student"))
-        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
-                      ("I9J0K1L2", "20210003", 1, "student"))
-        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
-                      ("ADMIN001", "SECURITY001", 1, "admin"))
+        # Create students table with optimized indexes
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            faculty TEXT,
+            program TEXT,
+            level TEXT,
+            image_path TEXT
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_students_name ON students(name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_students_faculty ON students(faculty)")
         
-        # Sample entry logs
-        current_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        # Create cards table with optimized indexes
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cards (
+            card_id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            card_type TEXT DEFAULT "student",
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cards_student_id ON cards(student_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_cards_type ON cards(card_type)")
         
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("A1B2C3D4", "20210001", current_date, "Main Gate", "success", "regular"))
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("E5F6G7H8", "20210002", current_date, "Main Gate", "success", "regular"))
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("I9J0K1L2", "20210003", yesterday, "Library Gate", "success", "regular"))
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("UNKNOWN", "UNKNOWN", yesterday, "Main Gate", "failure", "regular"))
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
-                      ("ADMIN001", "SECURITY001", yesterday, "Main Gate", "success", "visitor_access"))
-    except sqlite3.IntegrityError:
-        # Skip if data already exists
-        pass
-    
-    conn.commit()
-    conn.close()
+        # Create entry_logs table with optimized indexes
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS entry_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id TEXT,
+            student_id TEXT,
+            timestamp TEXT NOT NULL,
+            gate TEXT DEFAULT "Main Gate",
+            status TEXT NOT NULL,
+            entry_type TEXT DEFAULT "regular",
+            FOREIGN KEY (card_id) REFERENCES cards(card_id),
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_logs_timestamp ON entry_logs(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_logs_status ON entry_logs(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_logs_type ON entry_logs(entry_type)")
+        
+        # Insert sample data for testing
+        try:
+            # Sample students
+            cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("20210001", "John Smith", "Engineering", "Computer Engineering", "3rd Year", "assets/student1.png"))
+            cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("20210002", "Sarah Johnson", "Science", "Physics", "2nd Year", "assets/student2.png"))
+            cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("20210003", "Mohammed Ali", "Medicine", "General Medicine", "4th Year", "assets/student3.png"))
+            cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("SECURITY001", "Security Staff", "Security", "Gate Security", "Staff", "assets/security_staff.png"))
+            
+            # Sample cards
+            cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                          ("A1B2C3D4", "20210001", 1, "student"))
+            cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                          ("E5F6G7H8", "20210002", 1, "student"))
+            cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                          ("I9J0K1L2", "20210003", 1, "student"))
+            cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                          ("ADMIN001", "SECURITY001", 1, "admin"))
+            
+            # Sample entry logs
+            current_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+            
+            cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("A1B2C3D4", "20210001", current_date, "Main Gate", "success", "regular"))
+            cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("E5F6G7H8", "20210002", current_date, "Main Gate", "success", "regular"))
+            cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("I9J0K1L2", "20210003", yesterday, "Library Gate", "success", "regular"))
+            cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("UNKNOWN", "UNKNOWN", yesterday, "Main Gate", "failure", "regular"))
+            cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                          ("ADMIN001", "SECURITY001", yesterday, "Main Gate", "success", "visitor_access"))
+        except sqlite3.IntegrityError:
+            # Skip if data already exists
+            pass
+        
+        conn.commit()
+        
+    except Exception as e:
+        print(f"Error setting up database: {e}")
+        conn.rollback()
+    finally:
+        db_pool.return_connection(conn)
     
     print("Database setup completed.")
 
-# Database helper functions
+# Database helper functions with connection pooling
 def get_student_by_card(card_id):
     """Get student information by card ID"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-    SELECT s.id, s.name, s.faculty, s.program, s.level, s.image_path, c.is_active, c.card_type
-    FROM students s
-    JOIN cards c ON s.id = c.student_id
-    WHERE c.card_id = ?
-    """, (card_id,))
-    
-    result = cursor.fetchone()
-    conn.close()
-    
-    if result:
-        student_data = {
-            "id": result[0],
-            "name": result[1],
-            "faculty": result[2],
-            "program": result[3],
-            "level": result[4],
-            "image_path": result[5],
-            "valid": bool(result[6]),
-            "card_type": result[7],
-            "card_id": card_id
-        }
-        return student_data
-    return None
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        SELECT s.id, s.name, s.faculty, s.program, s.level, s.image_path, c.is_active, c.card_type
+        FROM students s
+        JOIN cards c ON s.id = c.student_id
+        WHERE c.card_id = ?
+        """, (card_id,))
+        
+        result = cursor.fetchone()
+        
+        if result:
+            student_data = {
+                "id": result[0],
+                "name": result[1],
+                "faculty": result[2],
+                "program": result[3],
+                "level": result[4],
+                "image_path": result[5],
+                "valid": bool(result[6]),
+                "card_type": result[7],
+                "card_id": card_id
+            }
+            return student_data
+        return None
+    finally:
+        db_pool.return_connection(conn)
 
 def log_entry(card_id, student_id, status, gate="Main Gate", entry_type="regular"):
     """Log an entry attempt"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    cursor.execute("""
-    INSERT INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type)
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, (card_id, student_id, timestamp, gate, status, entry_type))
-    
-    conn.commit()
-    conn.close()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        cursor.execute("""
+        INSERT INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (card_id, student_id, timestamp, gate, status, entry_type))
+        
+        conn.commit()
+        
+        # Invalidate relevant caches
+        invalidate_cache()
+    finally:
+        db_pool.return_connection(conn)
 
 def add_new_card(card_id, student_id, card_type="student"):
     """Add a new card to the database"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
+    conn = get_db_connection()
     try:
+        cursor = conn.cursor()
+        
         cursor.execute("""
         INSERT INTO cards (card_id, student_id, is_active, card_type)
         VALUES (?, ?, 1, ?)
         """, (card_id, student_id, card_type))
         
         conn.commit()
-        conn.close()
+        
+        # Invalidate relevant caches
+        invalidate_cache()
         return True
     except sqlite3.IntegrityError:
-        conn.close()
         return False
+    finally:
+        db_pool.return_connection(conn)
 
 def add_new_student(student_id, name, faculty="", program="", level="", image_path=""):
     """Add a new student to the database"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
+    conn = get_db_connection()
     try:
+        cursor = conn.cursor()
+        
         cursor.execute("""
         INSERT INTO students (id, name, faculty, program, level, image_path)
         VALUES (?, ?, ?, ?, ?, ?)
         """, (student_id, name, faculty, program, level, image_path))
         
         conn.commit()
-        conn.close()
+        
+        # Invalidate relevant caches
+        invalidate_cache()
         return True
     except sqlite3.IntegrityError:
         # Update existing student
@@ -304,12 +684,16 @@ def add_new_student(student_id, name, faculty="", program="", level="", image_pa
         """, (name, faculty, program, level, image_path, student_id))
         
         conn.commit()
-        conn.close()
+        
+        # Invalidate relevant caches
+        invalidate_cache()
         return True
+    finally:
+        db_pool.return_connection(conn)
 
 def get_all_students():
     """Get all students from the database"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
@@ -321,14 +705,11 @@ def get_all_students():
     """)
     
     result = cursor.fetchall()
-    conn.close()
-    
-    students = [dict(row) for row in result]
-    return students
+    return [dict(row) for row in result]
 
 def get_recent_entries(limit=10):
     """Get recent entry logs"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
@@ -341,14 +722,11 @@ def get_recent_entries(limit=10):
     """, (limit,))
     
     result = cursor.fetchall()
-    conn.close()
-    
-    entries = [dict(row) for row in result]
-    return entries
+    return [dict(row) for row in result]
 
 def get_entry_stats():
     """Get entry statistics"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # Get today's date
@@ -373,8 +751,6 @@ def get_entry_stats():
     # Get visitor entries
     cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE entry_type = \"visitor_access\"")
     visitor_entries = cursor.fetchone()[0]
-    
-    conn.close()
     
     return {
         "total": total_entries,
@@ -774,51 +1150,123 @@ def create_flask_templates():
     
     print("Flask templates created successfully.")
 
-# Flask app
+# Flask app with optimizations
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+# Configure Flask-Caching
+cache = Cache(app, config={
+    'CACHE_TYPE': 'simple',
+    'CACHE_DEFAULT_TIMEOUT': 300
+})
 
 @app.route("/")
+@cache.cached(timeout=300)  # Cache for 5 minutes
 def index():
     """Main page"""
     return render_template("index.html")
 
 @app.route("/api/recent_entries")
+@cache.cached(timeout=30)  # Cache for 30 seconds
 def api_recent_entries():
     """API endpoint for recent entries data"""
     entries = get_recent_entries(5)
     return jsonify({"status": "success", "data": entries})
 
 @app.route("/api/students")
+@cache.cached(timeout=300)  # Cache for 5 minutes
 def api_students():
     """API endpoint for students data"""
     students = get_all_students()
     return jsonify({"status": "success", "data": students})
 
 @app.route("/api/entries")
+@cache.cached(timeout=30)  # Cache for 30 seconds
 def api_entries():
     """API endpoint for entry logs data"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-    SELECT e.id, e.card_id, e.student_id, s.name as student_name, e.timestamp, e.gate, e.status, e.entry_type
-    FROM entry_logs e
-    LEFT JOIN students s ON e.student_id = s.id
-    ORDER BY e.timestamp DESC
-    LIMIT 100
-    """)
-    
-    entries = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    
-    return jsonify({"status": "success", "data": entries})
+    conn = get_db_connection()
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        SELECT e.id, e.card_id, e.student_id, s.name as student_name, e.timestamp, e.gate, e.status, e.entry_type
+        FROM entry_logs e
+        LEFT JOIN students s ON e.student_id = s.id
+        ORDER BY e.timestamp DESC
+        LIMIT 100
+        """)
+        
+        entries = [dict(row) for row in cursor.fetchall()]
+        return jsonify({"status": "success", "data": entries})
+    finally:
+        db_pool.return_connection(conn)
 
 @app.route("/api/stats")
+@cache.cached(timeout=30)  # Cache for 30 seconds
 def api_stats():
     """API endpoint for statistics data"""
     stats = get_entry_stats()
     return jsonify({"status": "success", "data": stats})
+
+# Add cache invalidation for data changes
+def invalidate_cache():
+    """Invalidate all cached data"""
+    cache.clear()
+
+# Modify database functions to invalidate cache
+def add_new_card(card_id, student_id, card_type="student"):
+    """Add a new card to the database"""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        INSERT INTO cards (card_id, student_id, is_active, card_type)
+        VALUES (?, ?, 1, ?)
+        """, (card_id, student_id, card_type))
+        
+        conn.commit()
+        
+        # Invalidate relevant caches
+        invalidate_cache()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        db_pool.return_connection(conn)
+
+def add_new_student(student_id, name, faculty="", program="", level="", image_path=""):
+    """Add a new student to the database"""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        INSERT INTO students (id, name, faculty, program, level, image_path)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (student_id, name, faculty, program, level, image_path))
+        
+        conn.commit()
+        
+        # Invalidate relevant caches
+        invalidate_cache()
+        return True
+    except sqlite3.IntegrityError:
+        # Update existing student
+        cursor.execute("""
+        UPDATE students
+        SET name = ?, faculty = ?, program = ?, level = ?, image_path = ?
+        WHERE id = ?
+        """, (name, faculty, program, level, image_path, student_id))
+        
+        conn.commit()
+        
+        # Invalidate relevant caches
+        invalidate_cache()
+        return True
+    finally:
+        db_pool.return_connection(conn)
 
 # PyQt5 GUI Classes
 class MainScreen(QWidget):
@@ -1193,13 +1641,13 @@ class StudentInfoScreen(QWidget):
                 log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success")
                 
                 # Open gate
-                gate_controller.open_gate()
+                hardware_controller.open_gate()
                 
                 # Return to main screen after delay
                 self.return_timer.start(5000)  # 5 seconds
                 
                 # Close gate after entry
-                QTimer.singleShot(6000, gate_controller.close_gate)
+                QTimer.singleShot(6000, hardware_controller.close_gate)
         else:
             # Invalid card
             self.status_label.setText("Access Denied")
@@ -1211,13 +1659,13 @@ class StudentInfoScreen(QWidget):
             log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "failure")
             
             # Trigger alarm for invalid access attempt
-            gate_controller.trigger_alarm()
+            hardware_controller.trigger_alarm()
             
             # Return to main screen after delay
             self.return_timer.start(5000)  # 5 seconds
             
             # Stop alarm when returning to main screen
-            QTimer.singleShot(5000, gate_controller.stop_alarm)
+            QTimer.singleShot(5000, hardware_controller.buzzer_off)
     
     def grant_visitor_access(self):
         """Grant access for a visitor"""
@@ -1239,13 +1687,13 @@ class StudentInfoScreen(QWidget):
             self.visitor_frame.setVisible(False)
             
             # Open gate
-            gate_controller.open_gate()
+            hardware_controller.open_gate()
             
             # Return to main screen after delay
             self.return_timer.start(5000)  # 5 seconds
             
             # Close gate after entry
-            QTimer.singleShot(6000, gate_controller.close_gate)
+            QTimer.singleShot(6000, hardware_controller.close_gate)
         else:
             print("Error: Cannot grant visitor access in this mode.")
     
@@ -1800,24 +2248,27 @@ class MainWindow(QMainWindow):
 
 # Main execution
 if __name__ == "__main__":
-    # Setup database and create placeholders
-    setup_database()
-    create_placeholder_images()
-    create_flask_templates()
-    
-    # Start Flask app in a separate thread
-    def run_flask():
-        try:
-            # Note: Use host="0.0.0.0" to make it accessible on the network
-            app.run(host="0.0.0.0", port=5000, debug=False)
-        except Exception as e:
-            print(f"Error running Flask app: {e}")
-            
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # Start PyQt5 GUI
-    app_gui = QApplication(sys.argv)
-    main_window = MainWindow()
-    main_window.show()
-    sys.exit(app_gui.exec_())
+    try:
+        # Setup database and create placeholders
+        setup_database()
+        create_placeholder_images()
+        create_flask_templates()
+        
+        # Start Flask app in a separate thread
+        def run_flask():
+            try:
+                app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+            except Exception as e:
+                print(f"Error running Flask app: {e}")
+                
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        
+        # Start PyQt5 GUI
+        app_gui = QApplication(sys.argv)
+        main_window = MainWindow()
+        main_window.show()
+        sys.exit(app_gui.exec_())
+    finally:
+        # Cleanup
+        db_pool.close_all()
