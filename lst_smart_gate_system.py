@@ -11,11 +11,9 @@ import threading
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFrame, QStackedWidget, QDialog, QLineEdit,
-    QMessageBox, QInputDialog, QRadioButton, QTimer
+    QMessageBox, QInputDialog, QRadioButton
 )
-from PyQt5.QtGui import QPixmap, QFont, QIcon
 from PyQt5.QtCore import Qt, QSize, QTimer
-from flask import Flask, render_template, jsonify, request
 
 # Ensure directories exist
 os.makedirs('assets', exist_ok=True)
