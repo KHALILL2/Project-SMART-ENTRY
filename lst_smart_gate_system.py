@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Smart Gate System for University Entry
-This application provides a GUI for a smart entry gate using NFC cards,
-and a web interface for monitoring entries.
-"""
-
 import os
 import sys
 import time
