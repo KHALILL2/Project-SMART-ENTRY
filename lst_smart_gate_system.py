@@ -1322,13 +1322,13 @@ class SmartGateApp(QMainWindow):
         self.stacked_widget.addWidget(self.student_info_screen)
         self.stacked_widget.addWidget(self.admin_screen)
         
+        # Show main screen
+        self.show_main_screen()
+        
         # Setup inactivity timer for automatic return to main screen
         self.inactivity_timer = QTimer(self)
         self.inactivity_timer.timeout.connect(self.show_main_screen)
         self.reset_inactivity_timer()
-
-      # Show main screen
-      self.show_main_screen
         
         # Simulate NFC reader (for testing only)
         self.nfc_timer = QTimer(self)
