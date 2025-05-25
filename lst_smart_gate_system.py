@@ -15,8 +15,106 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QPixmap
+from PyQt5.QtMultimedia import QSound
 
 from flask import Flask, render_template, jsonify
+
+# Gate Control and Alarm System
+class GateController:
+    """Controls the physical gate and alarm system"""
+    
+    def __init__(self):
+        self.is_open = False
+        self.is_alarm_active = False
+        self.alarm_thread = None
+        self.alarm_stop_event = threading.Event()
+        
+        # Load alarm sound
+        self.alarm_sound = QSound("assets/alarm.wav")
+        
+        # Create alarm sound if it doesn't exist
+        if not os.path.exists("assets/alarm.wav"):
+            self.create_alarm_sound()
+    
+    def create_alarm_sound(self):
+        """Create a simple alarm sound file"""
+        try:
+            from scipy.io import wavfile
+            import numpy as np
+            
+            # Create a simple alarm sound (1 second of alternating high/low tones)
+            sample_rate = 44100
+            duration = 1.0
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            
+            # Generate alternating tones
+            tone1 = np.sin(2 * np.pi * 880 * t)  # A5 note
+            tone2 = np.sin(2 * np.pi * 440 * t)  # A4 note
+            
+            # Combine tones
+            alarm_sound = np.zeros_like(t)
+            for i in range(len(t)):
+                if i % 2 == 0:
+                    alarm_sound[i] = tone1[i]
+                else:
+                    alarm_sound[i] = tone2[i]
+            
+            # Normalize and convert to 16-bit PCM
+            alarm_sound = np.int16(alarm_sound * 32767)
+            
+            # Save the sound file
+            os.makedirs("assets", exist_ok=True)
+            wavfile.write("assets/alarm.wav", sample_rate, alarm_sound)
+            
+        except ImportError:
+            print("Warning: Could not create alarm sound file. Install scipy for sound generation.")
+    
+    def open_gate(self):
+        """Open the gate"""
+        if not self.is_open:
+            print("Opening gate...")
+            # In a real implementation, this would control a servo or motor
+            self.is_open = True
+            # Simulate gate opening delay
+            time.sleep(1)
+            print("Gate opened")
+    
+    def close_gate(self):
+        """Close the gate"""
+        if self.is_open:
+            print("Closing gate...")
+            # In a real implementation, this would control a servo or motor
+            self.is_open = False
+            # Simulate gate closing delay
+            time.sleep(1)
+            print("Gate closed")
+    
+    def trigger_alarm(self):
+        """Trigger the alarm system"""
+        if not self.is_alarm_active:
+            self.is_alarm_active = True
+            self.alarm_stop_event.clear()
+            self.alarm_thread = threading.Thread(target=self._alarm_loop, daemon=True)
+            self.alarm_thread.start()
+            print("Alarm triggered!")
+    
+    def stop_alarm(self):
+        """Stop the alarm system"""
+        if self.is_alarm_active:
+            self.is_alarm_active = False
+            self.alarm_stop_event.set()
+            if self.alarm_thread:
+                self.alarm_thread.join(timeout=1)
+            print("Alarm stopped")
+    
+    def _alarm_loop(self):
+        """Alarm sound loop"""
+        while not self.alarm_stop_event.is_set():
+            self.alarm_sound.play()
+            time.sleep(1)  # Wait for sound to finish
+            if self.alarm_stop_event.is_set():
+                break
+            time.sleep(0.1)  # Small pause between sounds
 
 # Ensure directories exist
 os.makedirs("assets", exist_ok=True)
@@ -24,6 +122,9 @@ os.makedirs("database", exist_ok=True)
 os.makedirs("templates", exist_ok=True)
 os.makedirs("static/css", exist_ok=True)
 os.makedirs("static/js", exist_ok=True)
+
+# Create global gate controller instance
+gate_controller = GateController()
 
 # Database setup
 DB_PATH = "database/smart_gate.db"
@@ -1091,11 +1192,14 @@ class StudentInfoScreen(QWidget):
                 # Log successful entry
                 log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success")
                 
-                # Simulate gate opening
-                print("Gate Opening...")
+                # Open gate
+                gate_controller.open_gate()
                 
                 # Return to main screen after delay
                 self.return_timer.start(5000)  # 5 seconds
+                
+                # Close gate after entry
+                QTimer.singleShot(6000, gate_controller.close_gate)
         else:
             # Invalid card
             self.status_label.setText("Access Denied")
@@ -1106,8 +1210,14 @@ class StudentInfoScreen(QWidget):
             # Log failed entry
             log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "failure")
             
+            # Trigger alarm for invalid access attempt
+            gate_controller.trigger_alarm()
+            
             # Return to main screen after delay
             self.return_timer.start(5000)  # 5 seconds
+            
+            # Stop alarm when returning to main screen
+            QTimer.singleShot(5000, gate_controller.stop_alarm)
     
     def grant_visitor_access(self):
         """Grant access for a visitor"""
@@ -1128,11 +1238,14 @@ class StudentInfoScreen(QWidget):
             self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #388E3C;")
             self.visitor_frame.setVisible(False)
             
-            # Simulate gate opening
-            print("Gate Opening for Visitor...")
+            # Open gate
+            gate_controller.open_gate()
             
             # Return to main screen after delay
             self.return_timer.start(5000)  # 5 seconds
+            
+            # Close gate after entry
+            QTimer.singleShot(6000, gate_controller.close_gate)
         else:
             print("Error: Cannot grant visitor access in this mode.")
     
@@ -1250,10 +1363,191 @@ class AdminScreen(QWidget):
             }
         """)
         view_stats_button.clicked.connect(self.view_statistics)
+
+        # Testing Interface
+        test_group = QFrame()
+        test_group.setFrameShape(QFrame.StyledPanel)
+        test_group.setStyleSheet("""
+            QFrame {
+                background-color: #F5F5F5;
+                border: 1px solid #BDBDBD;
+                border-radius: 5px;
+                padding: 10px;
+            }
+        """)
+        test_layout = QVBoxLayout(test_group)
+        
+        test_title = QLabel("Testing Interface")
+        test_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
+        test_layout.addWidget(test_title)
+        
+        # Test card scanning buttons
+        scan_buttons_layout = QHBoxLayout()
+        
+        # Valid student card
+        valid_student_btn = QPushButton("Test Valid Student")
+        valid_student_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+        """)
+        valid_student_btn.clicked.connect(lambda: self.test_card_scan("A1B2C3D4"))
+        
+        # Admin card
+        admin_card_btn = QPushButton("Test Admin Card")
+        admin_card_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        admin_card_btn.clicked.connect(lambda: self.test_card_scan("ADMIN001"))
+        
+        # Invalid card
+        invalid_card_btn = QPushButton("Test Invalid Card")
+        invalid_card_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+        """)
+        invalid_card_btn.clicked.connect(lambda: self.test_card_scan("INVALID_CARD"))
+        
+        scan_buttons_layout.addWidget(valid_student_btn)
+        scan_buttons_layout.addWidget(admin_card_btn)
+        scan_buttons_layout.addWidget(invalid_card_btn)
+        
+        test_layout.addLayout(scan_buttons_layout)
+        
+        # Test visitor access
+        visitor_btn = QPushButton("Test Visitor Access")
+        visitor_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+        """)
+        visitor_btn.clicked.connect(self.test_visitor_access)
+        test_layout.addWidget(visitor_btn)
+
+        # Gate Control Testing
+        gate_group = QFrame()
+        gate_group.setFrameShape(QFrame.StyledPanel)
+        gate_group.setStyleSheet("""
+            QFrame {
+                background-color: #E3F2FD;
+                border: 1px solid #90CAF9;
+                border-radius: 5px;
+                padding: 10px;
+                margin-top: 10px;
+            }
+        """)
+        gate_layout = QVBoxLayout(gate_group)
+        
+        gate_title = QLabel("Gate Control Testing")
+        gate_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1565C0;")
+        gate_layout.addWidget(gate_title)
+        
+        gate_buttons_layout = QHBoxLayout()
+        
+        # Open gate button
+        open_gate_btn = QPushButton("Open Gate")
+        open_gate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+        """)
+        open_gate_btn.clicked.connect(self.test_open_gate)
+        
+        # Close gate button
+        close_gate_btn = QPushButton("Close Gate")
+        close_gate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+        """)
+        close_gate_btn.clicked.connect(self.test_close_gate)
+        
+        gate_buttons_layout.addWidget(open_gate_btn)
+        gate_buttons_layout.addWidget(close_gate_btn)
+        
+        gate_layout.addLayout(gate_buttons_layout)
+        
+        # Alarm testing
+        alarm_btn = QPushButton("Test Alarm System")
+        alarm_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+        """)
+        alarm_btn.clicked.connect(self.test_alarm)
+        
+        # Stop alarm button
+        stop_alarm_btn = QPushButton("Stop Alarm")
+        stop_alarm_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9E9E9E;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #757575;
+            }
+        """)
+        stop_alarm_btn.clicked.connect(self.stop_alarm)
+        
+        alarm_buttons_layout = QHBoxLayout()
+        alarm_buttons_layout.addWidget(alarm_btn)
+        alarm_buttons_layout.addWidget(stop_alarm_btn)
+        
+        gate_layout.addLayout(alarm_buttons_layout)
+        
+        test_layout.addWidget(gate_group)
         
         functions_layout.addWidget(add_button)
         functions_layout.addWidget(view_logs_button)
         functions_layout.addWidget(view_stats_button)
+        functions_layout.addWidget(test_group)
         
         # Add elements to main layout
         main_layout.addLayout(header_layout)
@@ -1262,6 +1556,49 @@ class AdminScreen(QWidget):
         main_layout.addStretch()
         
         self.setLayout(main_layout)
+    
+    def test_card_scan(self, card_id):
+        """Test card scanning with a specific card ID"""
+        if self.parent:
+            student_data = get_student_by_card(card_id)
+            if student_data:
+                self.parent.show_student_info_screen(student_data)
+            else:
+                # Handle invalid card
+                print(f"Invalid card: {card_id}")
+                log_entry(card_id, "UNKNOWN", "failure")
+                # Show denied status
+                self.parent.show_student_info_screen({"valid": False, "card_id": card_id})
+    
+    def test_visitor_access(self):
+        """Test visitor access functionality"""
+        if self.parent:
+            # Use admin card for visitor access
+            student_data = get_student_by_card("ADMIN001")
+            if student_data:
+                self.parent.show_student_info_screen(student_data)
+                # Wait a bit and then grant visitor access
+                QTimer.singleShot(1000, lambda: self.parent.student_info_screen.grant_visitor_access())
+    
+    def test_open_gate(self):
+        """Test opening the gate"""
+        gate_controller.open_gate()
+        QMessageBox.information(self, "Gate Control", "Gate opened successfully")
+    
+    def test_close_gate(self):
+        """Test closing the gate"""
+        gate_controller.close_gate()
+        QMessageBox.information(self, "Gate Control", "Gate closed successfully")
+    
+    def test_alarm(self):
+        """Test the alarm system"""
+        gate_controller.trigger_alarm()
+        QMessageBox.information(self, "Alarm System", "Alarm triggered! Click 'Stop Alarm' to deactivate.")
+    
+    def stop_alarm(self):
+        """Stop the alarm system"""
+        gate_controller.stop_alarm()
+        QMessageBox.information(self, "Alarm System", "Alarm stopped")
     
     def add_new_entry(self):
         """Show dialog to add new student and card"""
@@ -1447,10 +1784,6 @@ class MainWindow(QMainWindow):
         
         # Show main screen initially
         self.show_main_screen()
-        
-        # Start NFC scanning thread
-        self.nfc_thread = threading.Thread(target=self.scan_nfc_cards, daemon=True)
-        self.nfc_thread.start()
     
     def show_main_screen(self):
         """Switch to the main screen"""
@@ -1464,39 +1797,6 @@ class MainWindow(QMainWindow):
     def show_admin_screen(self):
         """Switch to the admin screen"""
         self.stacked_widget.setCurrentWidget(self.admin_screen)
-    
-    def scan_nfc_cards(self):
-        """Continuously scan for NFC cards"""
-        print("NFC scanning thread started...")
-        while True:
-            try:
-                # Simulate card scanning
-                # In a real implementation, use PN532 library here
-                time.sleep(random.uniform(3, 8)) # Simulate scan interval
-                
-                # Simulate a card scan
-                sample_cards = ["A1B2C3D4", "E5F6G7H8", "I9J0K1L2", "ADMIN001", "INVALID_CARD"]
-                scanned_card_id = random.choice(sample_cards)
-                
-                print(f"Card scanned: {scanned_card_id}")
-                
-                # Get student data
-                student_data = get_student_by_card(scanned_card_id)
-                
-                if student_data:
-                    # Show student info screen
-                    self.show_student_info_screen(student_data)
-                else:
-                    # Handle invalid card
-                    print(f"Invalid card: {scanned_card_id}")
-                    log_entry(scanned_card_id, "UNKNOWN", "failure")
-                    
-                    # Show denied status on student info screen (optional)
-                    # self.show_student_info_screen({"valid": False, "card_id": scanned_card_id})
-                    
-            except Exception as e:
-                print(f"Error in NFC scanning thread: {e}")
-                time.sleep(5) # Wait before retrying
 
 # Main execution
 if __name__ == "__main__":
