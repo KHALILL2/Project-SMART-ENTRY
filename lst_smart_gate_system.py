@@ -47,12 +47,13 @@ def setup_database():
     )
     ''')
     
-    # Create cards table
+    # Create cards table with card_type field
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS cards (
         card_id TEXT PRIMARY KEY,
         student_id TEXT NOT NULL,
         is_active INTEGER DEFAULT 1,
+        card_type TEXT DEFAULT 'student',
         FOREIGN KEY (student_id) REFERENCES students(id)
     )
     ''')
@@ -66,6 +67,7 @@ def setup_database():
         timestamp TEXT NOT NULL,
         gate TEXT DEFAULT 'Main Gate',
         status TEXT NOT NULL,
+        entry_type TEXT DEFAULT 'regular',
         FOREIGN KEY (card_id) REFERENCES cards(card_id),
         FOREIGN KEY (student_id) REFERENCES students(id)
     )
@@ -80,27 +82,33 @@ def setup_database():
                       ('20210002', 'Sarah Johnson', 'Science', 'Physics', '2nd Year', 'assets/student2.png'))
         cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
                       ('20210003', 'Mohammed Ali', 'Medicine', 'General Medicine', '4th Year', 'assets/student3.png'))
+        cursor.execute("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?, ?, ?)", 
+                      ('SECURITY001', 'Security Staff', 'Security', 'Gate Security', 'Staff', 'assets/security_staff.png'))
         
         # Sample cards
-        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?)", 
-                      ('A1B2C3D4', '20210001', 1))
-        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?)", 
-                      ('E5F6G7H8', '20210002', 1))
-        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?)", 
-                      ('I9J0K1L2', '20210003', 1))
+        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                      ('A1B2C3D4', '20210001', 1, 'student'))
+        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                      ('E5F6G7H8', '20210002', 1, 'student'))
+        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                      ('I9J0K1L2', '20210003', 1, 'student'))
+        cursor.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?)", 
+                      ('ADMIN001', 'SECURITY001', 1, 'admin'))
         
         # Sample entry logs
         current_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
         
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status) VALUES (?, ?, ?, ?, ?)", 
-                      ('A1B2C3D4', '20210001', current_date, 'Main Gate', 'success'))
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status) VALUES (?, ?, ?, ?, ?)", 
-                      ('E5F6G7H8', '20210002', current_date, 'Main Gate', 'success'))
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status) VALUES (?, ?, ?, ?, ?)", 
-                      ('I9J0K1L2', '20210003', yesterday, 'Library Gate', 'success'))
-        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status) VALUES (?, ?, ?, ?, ?)", 
-                      ('UNKNOWN', 'UNKNOWN', yesterday, 'Main Gate', 'failure'))
+        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                      ('A1B2C3D4', '20210001', current_date, 'Main Gate', 'success', 'regular'))
+        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                      ('E5F6G7H8', '20210002', current_date, 'Main Gate', 'success', 'regular'))
+        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                      ('I9J0K1L2', '20210003', yesterday, 'Library Gate', 'success', 'regular'))
+        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                      ('UNKNOWN', 'UNKNOWN', yesterday, 'Main Gate', 'failure', 'regular'))
+        cursor.execute("INSERT OR IGNORE INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type) VALUES (?, ?, ?, ?, ?, ?)", 
+                      ('ADMIN001', 'SECURITY001', yesterday, 'Main Gate', 'success', 'visitor_access'))
     except sqlite3.IntegrityError:
         # Skip if data already exists
         pass
@@ -117,7 +125,7 @@ def get_student_by_card(card_id):
     cursor = conn.cursor()
     
     cursor.execute('''
-    SELECT s.id, s.name, s.faculty, s.program, s.level, s.image_path, c.is_active
+    SELECT s.id, s.name, s.faculty, s.program, s.level, s.image_path, c.is_active, c.card_type
     FROM students s
     JOIN cards c ON s.id = c.student_id
     WHERE c.card_id = ?
@@ -134,12 +142,14 @@ def get_student_by_card(card_id):
             'program': result[3],
             'level': result[4],
             'image_path': result[5],
-            'valid': bool(result[6])
+            'valid': bool(result[6]),
+            'card_type': result[7],
+            'card_id': card_id
         }
         return student_data
     return None
 
-def log_entry(card_id, student_id, status, gate='Main Gate'):
+def log_entry(card_id, student_id, status, gate='Main Gate', entry_type='regular'):
     """Log an entry attempt"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -147,23 +157,23 @@ def log_entry(card_id, student_id, status, gate='Main Gate'):
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     cursor.execute('''
-    INSERT INTO entry_logs (card_id, student_id, timestamp, gate, status)
-    VALUES (?, ?, ?, ?, ?)
-    ''', (card_id, student_id, timestamp, gate, status))
+    INSERT INTO entry_logs (card_id, student_id, timestamp, gate, status, entry_type)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (card_id, student_id, timestamp, gate, status, entry_type))
     
     conn.commit()
     conn.close()
 
-def add_new_card(card_id, student_id):
+def add_new_card(card_id, student_id, card_type='student'):
     """Add a new card to the database"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
         cursor.execute('''
-        INSERT INTO cards (card_id, student_id, is_active)
-        VALUES (?, ?, 1)
-        ''', (card_id, student_id))
+        INSERT INTO cards (card_id, student_id, is_active, card_type)
+        VALUES (?, ?, 1, ?)
+        ''', (card_id, student_id, card_type))
         
         conn.commit()
         conn.close()
@@ -287,6 +297,9 @@ class StudentInfoScreen(QWidget):
         self.return_timer = QTimer(self)
         self.return_timer.timeout.connect(self.return_to_main)
         self.return_timer.setSingleShot(True)
+        
+        # For visitor access mode
+        self.visitor_mode = False
     
     def init_ui(self):
         """Setup the user interface"""
@@ -383,12 +396,53 @@ class StudentInfoScreen(QWidget):
         self.status_label.setStyleSheet("font-size: 20px; font-weight: bold;")
         status_layout.addWidget(self.status_label)
         
+        # Visitor access section (initially hidden)
+        self.visitor_frame = QFrame()
+        self.visitor_frame.setFrameShape(QFrame.Panel)
+        self.visitor_frame.setFrameShadow(QFrame.Raised)
+        self.visitor_frame.setLineWidth(2)
+        self.visitor_frame.setStyleSheet("background-color: #E1F5FE; border: 2px solid #0288D1;")
+        self.visitor_frame.setVisible(False)
+        
+        visitor_layout = QVBoxLayout(self.visitor_frame)
+        
+        visitor_title = QLabel("Visitor Access Mode")
+        visitor_title.setAlignment(Qt.AlignCenter)
+        visitor_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #01579B;")
+        
+        visitor_instruction = QLabel("Press the button below to grant access to a visitor")
+        visitor_instruction.setAlignment(Qt.AlignCenter)
+        visitor_instruction.setStyleSheet("font-size: 14px; color: #0277BD;")
+        
+        self.grant_access_button = QPushButton("Grant Visitor Access")
+        self.grant_access_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border-radius: 5px;
+                font-size: 16px;
+                padding: 10px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
+        """)
+        self.grant_access_button.clicked.connect(self.grant_visitor_access)
+        
+        visitor_layout.addWidget(visitor_title)
+        visitor_layout.addWidget(visitor_instruction)
+        visitor_layout.addWidget(self.grant_access_button)
+        
         # Add elements to main layout
         main_layout.addLayout(header_layout)
         main_layout.addSpacing(10)
         main_layout.addLayout(content_layout)
         main_layout.addStretch()
         main_layout.addWidget(self.status_frame)
+        main_layout.addWidget(self.visitor_frame)
         
         self.setLayout(main_layout)
     
@@ -425,6 +479,13 @@ class StudentInfoScreen(QWidget):
     
     def update_student_info(self, student_data):
         """Update student information display"""
+        # Store current student data
+        self.current_student_data = student_data
+        
+        # Check if this is an admin card
+        is_admin_card = student_data.get("card_type") == "admin"
+        self.visitor_mode = is_admin_card
+        
         # Update image
         image_path = student_data.get("image_path", "assets/student_placeholder.png")
         pixmap = QPixmap(image_path)
@@ -445,25 +506,71 @@ class StudentInfoScreen(QWidget):
         
         # Update entry status
         is_valid = student_data.get("valid", False)
+        
         if is_valid:
-            self.status_label.setText("Access Granted")
-            self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
-            self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #2E7D32;")
-            self.activate_valid_entry()
-            
-            # Log successful entry
-            log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success")
+            if is_admin_card:
+                # Admin card - show visitor access mode
+                self.status_label.setText("Security Staff Identified")
+                self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+                self.status_frame.setStyleSheet("background-color: #2196F3; border: 2px solid #1565C0;")
+                self.visitor_frame.setVisible(True)
+                
+                # Log admin card scan
+                log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success", entry_type="admin_scan")
+                
+                # Don't activate entry yet - wait for visitor access button
+                self.return_timer.start(30000)  # 30 seconds timeout for admin mode
+            else:
+                # Regular student card - grant access
+                self.status_label.setText("Access Granted")
+                self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+                self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #2E7D32;")
+                self.visitor_frame.setVisible(False)
+                self.activate_valid_entry()
+                
+                # Log successful entry
+                log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success")
+                
+                # Start automatic return timer
+                self.return_timer.start(10000)  # 10 seconds
         else:
+            # Invalid card
             self.status_label.setText("Access Denied: Invalid Card")
             self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
             self.status_frame.setStyleSheet("background-color: #F44336; border: 2px solid #C62828;")
+            self.visitor_frame.setVisible(False)
             self.activate_invalid_entry()
             
             # Log failed entry
             log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "failure")
-        
-        # Start automatic return timer
-        self.return_timer.start(10000)  # 10 seconds
+            
+            # Start automatic return timer
+            self.return_timer.start(10000)  # 10 seconds
+    
+    def grant_visitor_access(self):
+        """Grant access to a visitor"""
+        if self.visitor_mode and hasattr(self, 'current_student_data'):
+            # Update status to show visitor access granted
+            self.status_label.setText("Visitor Access Granted")
+            self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+            self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #2E7D32;")
+            
+            # Hide visitor frame
+            self.visitor_frame.setVisible(False)
+            
+            # Activate entry
+            self.activate_valid_entry()
+            
+            # Log visitor access
+            log_entry(
+                self.current_student_data.get("card_id", "UNKNOWN"), 
+                self.current_student_data.get("id", "UNKNOWN"), 
+                "success", 
+                entry_type="visitor_access"
+            )
+            
+            # Reset timer
+            self.return_timer.start(10000)  # 10 seconds
     
     def activate_valid_entry(self):
         """Activate valid entry indicators"""
@@ -962,7 +1069,7 @@ class AddCardDialog(QDialog):
     def init_ui(self):
         """Setup the user interface"""
         self.setWindowTitle("Add New Card")
-        self.setFixedSize(500, 400)
+        self.setFixedSize(500, 450)
         self.setStyleSheet("background-color: #F5F5F5;")
         
         # Main layout
@@ -1043,6 +1150,26 @@ class AddCardDialog(QDialog):
         name_layout.addWidget(name_label)
         name_layout.addWidget(self.name_input)
         
+        # Card type selection
+        card_type_layout = QHBoxLayout()
+        card_type_label = QLabel("Card Type:")
+        card_type_label.setStyleSheet("font-size: 16px;")
+        
+        self.card_type_student = QRadioButton("Student")
+        self.card_type_student.setChecked(True)
+        self.card_type_student.setStyleSheet("font-size: 16px;")
+        
+        self.card_type_admin = QRadioButton("Admin (Security Staff)")
+        self.card_type_admin.setStyleSheet("font-size: 16px;")
+        
+        card_type_group = QHBoxLayout()
+        card_type_group.addWidget(self.card_type_student)
+        card_type_group.addWidget(self.card_type_admin)
+        card_type_group.addStretch()
+        
+        card_type_layout.addWidget(card_type_label)
+        card_type_layout.addLayout(card_type_group)
+        
         # Read card button
         read_card_button = QPushButton("Scan New Card")
         read_card_button.setStyleSheet("""
@@ -1070,6 +1197,7 @@ class AddCardDialog(QDialog):
         # Add fields to form
         form_layout.addLayout(student_id_layout)
         form_layout.addLayout(name_layout)
+        form_layout.addLayout(card_type_layout)
         form_layout.addWidget(read_card_button, 0, Qt.AlignCenter)
         form_layout.addWidget(self.status_label)
         
@@ -1140,19 +1268,29 @@ class AddCardDialog(QDialog):
             QMessageBox.warning(self, "Error", "You must scan a card first")
             return
         
-        # Add student if not exists
-        student_added = add_new_student(student_id, name)
+        # Determine card type
+        card_type = "admin" if self.card_type_admin.isChecked() else "student"
         
-        # Add card
-        card_added = add_new_card(self.card_id, student_id)
+        # Add student if not exists
+        if card_type == "admin":
+            # For admin cards, set faculty and level appropriately
+            student_added = add_new_student(student_id, name, "Security", "Gate Security", "Staff")
+        else:
+            # For student cards, just add the basic info
+            student_added = add_new_student(student_id, name)
+        
+        # Add card with appropriate type
+        card_added = add_new_card(self.card_id, student_id, card_type)
         
         if card_added:
-            QMessageBox.information(self, "Success", "Card saved successfully")
+            card_type_text = "Admin" if card_type == "admin" else "Student"
+            QMessageBox.information(self, "Success", f"{card_type_text} card saved successfully")
             
             # Reset form
             self.student_id_input.clear()
             self.name_input.clear()
             self.card_id = None
+            self.card_type_student.setChecked(True)
             self.status_label.setText("Ready to scan card")
             self.status_label.setStyleSheet("font-size: 16px; color: #1A237E;")
         else:
@@ -1322,25 +1460,25 @@ def api_students():
     
     return jsonify({'status': 'success', 'data': students})
 
-@app.route('/api/entries')
+@app.route("/api/entries")
 def api_entries():
     """API endpoint for entry logs data"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    cursor.execute('''
-    SELECT e.id, e.card_id, e.student_id, s.name as student_name, e.timestamp, e.gate, e.status
+    cursor.execute("""
+    SELECT e.id, e.card_id, e.student_id, s.name as student_name, e.timestamp, e.gate, e.status, e.entry_type
     FROM entry_logs e
     LEFT JOIN students s ON e.student_id = s.id
     ORDER BY e.timestamp DESC
     LIMIT 100
-    ''')
+    """)
     
     entries = [dict(row) for row in cursor.fetchall()]
     conn.close()
     
-    return jsonify({'status': 'success', 'data': entries})
+    return jsonify({"status": "success", "data": entries})
 
 @app.route('/api/stats')
 def api_stats():
@@ -1814,10 +1952,13 @@ document.addEventListener('DOMContentLoaded', function() {
                             <td>${date.toLocaleDateString()}</td>
                             <td>${date.toLocaleTimeString()}</td>
                             <td>${entry.student_id || 'Unknown'}</td>
-                            <td>${entry.student_name || 'Unknown'}</td>
-                            <td>${entry.gate}</td>
-                            <td><span class="badge ${entry.status === 'success' ? 'bg-success' : 'bg-danger'}">${entry.status}</span></td>
-                        `;
+                             <td>${entry.student_name || 'Unknown'}</td>
+                        <td>${entry.gate}</td>
+                        <td><span class="badge ${entry.status === 'success' ? 'bg-success' : 'bg-danger'}">${entry.status}</span></td>
+                        <td>${entry.entry_type === 'visitor_access' ? '<span class="badge bg-info">Visitor</span>' : 
+                             entry.entry_type === 'admin_scan' ? '<span class="badge bg-primary">Admin</span>' : 
+                             '<span class="badge bg-secondary">Regular</span>'}</td>
+                    `;
                         tableBody.appendChild(row);
                     });
                 }
