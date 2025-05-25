@@ -14,11 +14,9 @@ from PyQt5.QtWidgets import (
     QMessageBox, QInputDialog, QRadioButton
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
-from PyQt5.QtGui import QPixmap # Added missing QPixmap import
+from PyQt5.QtGui import QPixmap
 
-# --- ADDED Flask Imports ---
 from flask import Flask, render_template, jsonify
-# --------------------------
 
 # Ensure directories exist
 os.makedirs("assets", exist_ok=True)
@@ -252,14 +250,14 @@ def get_entry_stats():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Get today"s date
+    # Get today's date
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     
     # Get total entries
     cursor.execute("SELECT COUNT(*) FROM entry_logs")
     total_entries = cursor.fetchone()[0]
     
-    # Get today"s entries
+    # Get today's entries
     cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE timestamp LIKE ?", (f"{today}%",))
     today_entries = cursor.fetchone()[0]
     
@@ -285,7 +283,7 @@ def get_entry_stats():
         "visitor": visitor_entries
     }
 
-# Create placeholder images if they don"t exist
+# Create placeholder images if they don't exist
 def create_placeholder_images():
     """Create placeholder images for testing"""
     # University logo placeholder
@@ -397,14 +395,14 @@ def create_flask_templates():
                 <div class="col-md-6">
                     <div class="card">
                         <div class="card-header">
-                            <h5>Today"s Statistics</h5>
+                            <h5>Today's Statistics</h5>
                         </div>
                         <div class="card-body">
                             <div class="row">
                                 <div class="col-6 mb-3">
                                     <div class="stat-card bg-primary text-white">
                                         <h3 id="today-entries">0</h3>
-                                        <p>Today"s Entries</p>
+                                        <p>Today's Entries</p>
                                     </div>
                                 </div>
                                 <div class="col-6 mb-3">
@@ -486,7 +484,7 @@ def create_flask_templates():
                 <div class="col-md-3">
                     <div class="stat-card bg-primary text-white">
                         <h3 id="stats-today-entries">0</h3>
-                        <p>Today"s Entries</p>
+                        <p>Today's Entries</p>
                     </div>
                 </div>
                 <div class="col-md-3">
@@ -1081,7 +1079,7 @@ class StudentInfoScreen(QWidget):
                 # Log admin card scan
                 log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success", entry_type="admin_scan")
                 
-                # Don"t activate entry yet - wait for visitor access button
+                # Don't activate entry yet - wait for visitor access button
                 self.return_timer.start(30000)  # 30 seconds timeout for admin mode
             else:
                 # Regular student card - grant access
@@ -1299,7 +1297,9 @@ class AdminScreen(QWidget):
         print("\n--- Recent Entry Logs ---")
         entries = get_recent_entries(20)
         for entry in entries:
-            print(f"{entry["timestamp"]} - Card: {entry["card_id"]} - Student: {entry["student_name"]} - Status: {entry["status"]}")
+            print("{} - Card: {} - Student: {} - Status: {}".format(
+                entry["timestamp"], entry["card_id"], entry["student_name"], entry["status"]
+            ))
         print("------------------------\n")
         QMessageBox.information(self, "Entry Logs", "Recent entry logs printed to console.")
     
@@ -1310,7 +1310,7 @@ class AdminScreen(QWidget):
 Entry Statistics:
 
 Total Entries: {stats["total"]}
-Today"s Entries: {stats["today"]}
+Today's Entries: {stats["today"]}
 Successful Entries: {stats["successful"]}
 Failed Entries: {stats["failed"]}
 Visitor Access: {stats["visitor"]}
@@ -1521,4 +1521,3 @@ if __name__ == "__main__":
     main_window = MainWindow()
     main_window.show()
     sys.exit(app_gui.exec_())
-
