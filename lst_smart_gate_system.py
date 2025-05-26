@@ -2297,4 +2297,3 @@ if __name__ == "__main__":
     exit_code = app_gui.exec_()
     logger.info(f"GUI exited with code: {exit_code}")
     sys.exit(exit_code)
-
