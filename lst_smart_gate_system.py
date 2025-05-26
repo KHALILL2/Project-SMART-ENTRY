@@ -327,7 +327,7 @@ class HardwareController:
         student_data = get_student_by_card(card_id)
         
         if student_data and student_data.get("valid", False):
-            logger.info(f"Valid card scanned: {card_id}, Student: {student_data.get("name")}")
+            logger.info(f"Valid card scanned: {card_id}, Student: {student_data.get('name')}")
             # Valid card
             self.green_led_on()
             self.green_buzzer_on()
