@@ -18,7 +18,7 @@ from adafruit_servokit import ServoKit
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFrame, QStackedWidget, QDialog, QLineEdit,
-    QMessageBox, QInputDialog, QRadioButton
+    QMessageBox, QInputDialog, QRadioButton, QGroupBox
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QPixmap
@@ -1153,15 +1153,18 @@ class MainScreen(QWidget):
     def init_ui(self):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Header with admin button and datetime
         header_layout = QHBoxLayout()
         admin_button = QPushButton("Admin")
         admin_button.setFixedSize(100, 40)
         admin_button.setStyleSheet("""
-            QPushButton {{ background-color: #1A237E; color: white; border-radius: 5px; font-size: 16px; }}
-            QPushButton:hover {{ background-color: #0D47A1; }}
-            QPushButton:pressed {{ background-color: #0A2472; }}
+            QPushButton { background-color: #1A237E; color: white; border-radius: 5px; font-size: 16px; }
+            QPushButton:hover { background-color: #0D47A1; }
+            QPushButton:pressed { background-color: #0A2472; }
         """)
         admin_button.clicked.connect(self.show_admin_screen)
+        
         self.datetime_label = QLabel()
         self.datetime_label.setAlignment(Qt.AlignRight)
         self.datetime_label.setStyleSheet("font-size: 16px; color: #1A237E;")
@@ -1169,52 +1172,143 @@ class MainScreen(QWidget):
         self.datetime_timer = QTimer(self)
         self.datetime_timer.timeout.connect(self.update_datetime)
         self.datetime_timer.start(1000)
+        
         header_layout.addWidget(admin_button)
         header_layout.addStretch()
         header_layout.addWidget(self.datetime_label)
-        logo_layout = QVBoxLayout()
-        logo_layout.setAlignment(Qt.AlignCenter)
-        logo_frame = QFrame()
-        logo_frame.setFrameShape(QFrame.Box)
-        logo_frame.setFrameShadow(QFrame.Raised)
-        logo_frame.setLineWidth(2)
-        logo_frame.setStyleSheet("border: 2px solid #1A237E;")
-        logo_frame.setFixedSize(200, 200)
-        logo_inner_layout = QVBoxLayout(logo_frame)
-        logo_label = QLabel()
-        logo_label.setAlignment(Qt.AlignCenter)
-        logo_path = "assets/university_logo_placeholder.png"
-        pixmap = QPixmap(logo_path)
-        if pixmap.isNull():
-            logo_label.setText("University Logo")
-            logo_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #1A237E;")
-        else:
-            pixmap = pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo_label.setPixmap(pixmap)
         
-        logo_inner_layout.addWidget(logo_label)
-        logo_layout.addWidget(logo_frame)
-        welcome_label = QLabel("Welcome to Smart Gate System")
-        welcome_label.setAlignment(Qt.AlignCenter)
-        welcome_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #1A237E; margin: 20px 0;")
-        instructions_frame = QFrame()
-        instructions_frame.setFrameShape(QFrame.Box)
-        instructions_frame.setFrameShadow(QFrame.Sunken)
-        instructions_frame.setLineWidth(1)
-        instructions_frame.setStyleSheet("border: 1px solid #BDBDBD; background-color: #E8EAF6; padding: 10px;")
-        instructions_layout = QVBoxLayout(instructions_frame)
-        instruction_title = QLabel("Instructions:")
-        instruction_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
-        instruction_text = QLabel("Please scan your NFC card to enter")
-        instruction_text.setAlignment(Qt.AlignCenter)
-        instruction_text.setStyleSheet("font-size: 16px; color: #1A237E; margin: 10px 0;")
-        instructions_layout.addWidget(instruction_title)
-        instructions_layout.addWidget(instruction_text)
+        # Control Panel
+        control_frame = QFrame()
+        control_frame.setFrameShape(QFrame.Box)
+        control_frame.setFrameShadow(QFrame.Raised)
+        control_frame.setLineWidth(2)
+        control_frame.setStyleSheet("""
+            QFrame { 
+                border: 2px solid #1A237E;
+                background-color: #E8EAF6;
+                padding: 10px;
+            }
+        """)
+        
+        control_layout = QVBoxLayout(control_frame)
+        
+        # Title
+        title_label = QLabel("Control Panel")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #1A237E; margin-bottom: 10px;")
+        control_layout.addWidget(title_label)
+        
+        # Gate Controls
+        gate_group = QGroupBox("Gate Controls")
+        gate_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 16px;
+                font-weight: bold;
+                border: 1px solid #1A237E;
+                margin-top: 10px;
+            }
+            QGroupBox::title {
+                color: #1A237E;
+            }
+        """)
+        gate_layout = QHBoxLayout()
+        
+        open_gate_btn = QPushButton("Open Gate")
+        close_gate_btn = QPushButton("Close Gate")
+        for btn in [open_gate_btn, close_gate_btn]:
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1A237E;
+                    color: white;
+                    border-radius: 5px;
+                    font-size: 16px;
+                    padding: 10px;
+                    min-width: 120px;
+                }
+                QPushButton:hover {
+                    background-color: #0D47A1;
+                }
+                QPushButton:pressed {
+                    background-color: #0A2472;
+                }
+            """)
+        
+        open_gate_btn.clicked.connect(self.open_gate)
+        close_gate_btn.clicked.connect(self.close_gate)
+        
+        gate_layout.addWidget(open_gate_btn)
+        gate_layout.addWidget(close_gate_btn)
+        gate_group.setLayout(gate_layout)
+        
+        # Simulation Controls
+        sim_group = QGroupBox("Simulation Controls")
+        sim_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 16px;
+                font-weight: bold;
+                border: 1px solid #1A237E;
+                margin-top: 10px;
+            }
+            QGroupBox::title {
+                color: #1A237E;
+            }
+        """)
+        sim_layout = QHBoxLayout()
+        
+        valid_login_btn = QPushButton("Valid Login")
+        invalid_login_btn = QPushButton("Invalid Login")
+        alarm_btn = QPushButton("Trigger Alarm")
+        
+        for btn in [valid_login_btn, invalid_login_btn, alarm_btn]:
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1A237E;
+                    color: white;
+                    border-radius: 5px;
+                    font-size: 16px;
+                    padding: 10px;
+                    min-width: 120px;
+                }
+                QPushButton:hover {
+                    background-color: #0D47A1;
+                }
+                QPushButton:pressed {
+                    background-color: #0A2472;
+                }
+            """)
+        
+        valid_login_btn.clicked.connect(self.simulate_valid_login)
+        invalid_login_btn.clicked.connect(self.simulate_invalid_login)
+        alarm_btn.clicked.connect(self.trigger_alarm)
+        
+        sim_layout.addWidget(valid_login_btn)
+        sim_layout.addWidget(invalid_login_btn)
+        sim_layout.addWidget(alarm_btn)
+        sim_group.setLayout(sim_layout)
+        
+        # Status Display
+        self.status_label = QLabel("System Ready")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("""
+            QLabel {
+                font-size: 18px;
+                color: #1A237E;
+                padding: 10px;
+                background-color: #E8EAF6;
+                border-radius: 5px;
+            }
+        """)
+        
+        # Add all components to control layout
+        control_layout.addWidget(gate_group)
+        control_layout.addWidget(sim_group)
+        control_layout.addWidget(self.status_label)
+        
+        # Add all components to main layout
         main_layout.addLayout(header_layout)
-        main_layout.addLayout(logo_layout)
-        main_layout.addWidget(welcome_label)
+        main_layout.addWidget(control_frame)
         main_layout.addStretch()
-        main_layout.addWidget(instructions_frame)
+        
         self.setLayout(main_layout)
     
     def update_datetime(self):
@@ -1226,6 +1320,109 @@ class MainScreen(QWidget):
     def show_admin_screen(self):
         if self.parent:
             self.parent.show_admin_screen()
+    
+    def open_gate(self):
+        try:
+            gate_controller.open_gate()
+            self.status_label.setText("Gate Opening...")
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    font-size: 18px;
+                    color: #4CAF50;
+                    padding: 10px;
+                    background-color: #E8F5E9;
+                    border-radius: 5px;
+                }
+            """)
+            QTimer.singleShot(5000, lambda: self.status_label.setText("System Ready"))
+        except Exception as e:
+            logger.error(f"Error opening gate: {e}")
+            self.status_label.setText("Error Opening Gate")
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    font-size: 18px;
+                    color: #F44336;
+                    padding: 10px;
+                    background-color: #FFEBEE;
+                    border-radius: 5px;
+                }
+            """)
+    
+    def close_gate(self):
+        try:
+            gate_controller.close_gate()
+            self.status_label.setText("Gate Closing...")
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    font-size: 18px;
+                    color: #4CAF50;
+                    padding: 10px;
+                    background-color: #E8F5E9;
+                    border-radius: 5px;
+                }
+            """)
+            QTimer.singleShot(5000, lambda: self.status_label.setText("System Ready"))
+        except Exception as e:
+            logger.error(f"Error closing gate: {e}")
+            self.status_label.setText("Error Closing Gate")
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    font-size: 18px;
+                    color: #F44336;
+                    padding: 10px;
+                    background-color: #FFEBEE;
+                    border-radius: 5px;
+                }
+            """)
+    
+    def simulate_valid_login(self):
+        try:
+            student_data = {
+                "id": "20210001",
+                "name": "Test Student",
+                "faculty": "Engineering",
+                "program": "Computer Science",
+                "level": "3rd Year",
+                "valid": True,
+                "card_id": "TEST001"
+            }
+            if self.parent:
+                self.parent.show_student_info(student_data)
+        except Exception as e:
+            logger.error(f"Error simulating valid login: {e}")
+            self.status_label.setText("Error in Simulation")
+    
+    def simulate_invalid_login(self):
+        try:
+            student_data = {
+                "id": "UNKNOWN",
+                "name": "Invalid Card",
+                "valid": False,
+                "card_id": "INVALID001"
+            }
+            if self.parent:
+                self.parent.show_student_info(student_data)
+        except Exception as e:
+            logger.error(f"Error simulating invalid login: {e}")
+            self.status_label.setText("Error in Simulation")
+    
+    def trigger_alarm(self):
+        try:
+            gate_controller.trigger_alarm()
+            self.status_label.setText("Alarm Triggered!")
+            self.status_label.setStyleSheet("""
+                QLabel {
+                    font-size: 18px;
+                    color: #F44336;
+                    padding: 10px;
+                    background-color: #FFEBEE;
+                    border-radius: 5px;
+                }
+            """)
+            QTimer.singleShot(5000, lambda: self.status_label.setText("System Ready"))
+        except Exception as e:
+            logger.error(f"Error triggering alarm: {e}")
+            self.status_label.setText("Error Triggering Alarm")
 
 class StudentInfoScreen(QWidget):
     def __init__(self, parent=None):
