@@ -2098,7 +2098,7 @@ class AdminScreen(QWidget):
         logger.info("\n--- Recent Entry Logs ---")
         entries = get_recent_entries(20)
         for entry in entries:
-            logger.info(f"{entry["timestamp"]} - Card: {entry["card_id"]} - Student: {entry["student_name"]} - Status: {entry["status"]}")
+            logger.info(f"{entry['timestamp']} - Card: {entry['card_id']} - Student: {entry['student_name']} - Status: {entry['status']}")
         logger.info("------------------------\n")
         QMessageBox.information(self, "Entry Logs", "Recent entry logs printed to console/log file.")
     
@@ -2108,11 +2108,11 @@ class AdminScreen(QWidget):
         message = f"""
 Entry Statistics:
 
-Total Entries: {stats["total"]}
-Today"s Entries: {stats["today"]}
-Successful Entries: {stats["successful"]}
-Failed Entries: {stats["failed"]}
-Visitor Access: {stats["visitor"]}
+Total Entries: {stats['total']}
+Today's Entries: {stats['today']}
+Successful Entries: {stats['successful']}
+Failed Entries: {stats['failed']}
+Visitor Access: {stats['visitor']}
         """
         QMessageBox.information(self, "Statistics", message)
     
