@@ -159,8 +159,8 @@ class HardwareController:
             self.SERVO_MIN_PULSE = 500
             self.SERVO_MAX_PULSE = 2500
             self.SERVO_FREQ = 50
-            self.SERVO_SPEED = 0.3
-            self.SERVO_STEPS = 20
+            self.SERVO_SPEED = 0.5  # Increased speed
+            self.SERVO_STEPS = 30   # More steps for smoother movement
             self.SERVO_CLOSED_ANGLE = 0
             self.SERVO_OPEN_ANGLE = 120
             
@@ -238,26 +238,26 @@ class HardwareController:
         student_data = get_student_by_card(card_id)
         if student_data and student_data.get("valid", False):
             logger.info(f"Valid card scanned: {card_id}, Student: {student_data.get('name')}")
-            self.green_led_on()
-            self.green_buzzer_on()
+            self.red_led_on()  # Switched to red for success
+            self.red_buzzer_on()  # Switched to red buzzer for success
             self.open_gate()
             log_entry(card_id, student_data.get("id", "UNKNOWN"), "success")
             def delayed_close():
-                time.sleep(5)
-                self.green_led_off()
-                self.green_buzzer_off()
+                time.sleep(8)  # Increased delay
+                self.red_led_off()
+                self.red_buzzer_off()
                 self.close_gate()
             threading.Thread(target=delayed_close, daemon=True).start()
         else:
             logger.warning(f"Invalid or inactive card scanned: {card_id}")
-            self.red_led_on()
-            self.red_buzzer_on()
+            self.green_led_on()  # Switched to green for failure
+            self.green_buzzer_on()  # Switched to green buzzer for failure
             log_entry(card_id, "UNKNOWN", "failure")
             def delayed_alarm_off():
                 self.trigger_alarm()
-                time.sleep(3)
-                self.red_led_off()
-                self.red_buzzer_off()
+                time.sleep(5)  # Increased delay
+                self.green_led_off()
+                self.green_buzzer_off()
             threading.Thread(target=delayed_alarm_off, daemon=True).start()
     
     def _move_servo_smoothly(self, target_angle):
@@ -270,27 +270,38 @@ class HardwareController:
             if abs(current_angle - target_angle) < 1:
                 self.servo.angle = target_angle
                 return
+            
             steps = self.SERVO_STEPS
             angle_diff = target_angle - current_angle
             angle_step = angle_diff / steps
             total_time = abs(angle_diff / 90.0) * self.SERVO_SPEED
             delay = total_time / steps
             delay = max(0.01, delay)
+            
+            # First ensure relay is on
+            self.relay_on()
+            time.sleep(0.2)  # Give relay time to stabilize
+            
+            # Then move servo
             for i in range(steps):
                 step_target_angle = current_angle + (angle_step * (i + 1))
                 self.servo.angle = step_target_angle
                 time.sleep(delay)
+            
             self.servo.angle = target_angle
-            time.sleep(0.1)
+            time.sleep(0.2)  # Hold position briefly
+            
+            # Turn off relay after movement
+            self.relay_off()
+            
         except Exception as e:
             logger.error(f"Error moving servo: {e}")
+            self.relay_off()  # Ensure relay is off on error
     
     def open_gate(self):
         if self.gate_closed:
             logger.info("Opening gate...")
             try:
-                self.relay_on()
-                time.sleep(0.3)
                 if self.servo:
                     self._move_servo_smoothly(self.SERVO_OPEN_ANGLE)
                 else:
@@ -353,20 +364,20 @@ class HardwareController:
     def relay_on(self):
         GPIO.output(self.RELAY_PIN, self.relay_state_on)
         logger.info(f"Turning RELAY ON (Pin {self.RELAY_PIN}, State: {self.relay_state_on})")
-        time.sleep(0.1)
+        time.sleep(0.2)  # Increased delay for relay stability
     
     def relay_off(self):
         GPIO.output(self.RELAY_PIN, self.relay_state_off)
         logger.info(f"Turning RELAY OFF (Pin {self.RELAY_PIN}, State: {self.relay_state_off})")
-        time.sleep(0.1)
+        time.sleep(0.2)  # Increased delay for relay stability
     
     def trigger_alarm(self):
         def alarm_sequence():
             for _ in range(3):
                 self.red_buzzer_on()
-                time.sleep(0.3)
+                time.sleep(0.5)  # Increased duration
                 self.red_buzzer_off()
-                time.sleep(0.3)
+                time.sleep(0.5)  # Increased duration
         threading.Thread(target=alarm_sequence, daemon=True).start()
     
     def cleanup(self):
