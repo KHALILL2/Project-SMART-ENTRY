@@ -1743,6 +1743,7 @@ class StudentInfoScreen(QWidget):
         
         self.grant_access_button = QPushButton("Grant Visitor Access")
         self.grant_access_button.setStyleSheet("""
+
             QPushButton {
                 background-color: #2196F3;
                 color: white;
@@ -2297,3 +2298,4 @@ if __name__ == "__main__":
     exit_code = app_gui.exec_()
     logger.info(f"GUI exited with code: {exit_code}")
     sys.exit(exit_code)
+
