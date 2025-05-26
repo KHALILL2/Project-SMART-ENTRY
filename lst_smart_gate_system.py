@@ -1367,12 +1367,12 @@ def add_new_student(student_id, name, faculty="", program="", level="", image_pa
         db_pool.return_connection(conn)
 
 class MainWindow(QMainWindow):
-    """Main application window with simplified single-screen interface"""
+    """Main application window with simplified interface"""
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Gate Control System")
-        self.setGeometry(100, 100, 800, 600)
+        self.setWindowTitle("Smart Gate Control")
+        self.setGeometry(100, 100, 400, 300)
         
         # Create central widget
         central_widget = QWidget()
@@ -1387,31 +1387,17 @@ class MainWindow(QMainWindow):
         status_group.setFrameStyle(QFrame.StyledPanel)
         status_layout = QVBoxLayout(status_group)
         
-        # Status header
-        status_header = QLabel("System Status")
-        status_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
-        status_layout.addWidget(status_header)
-        
         # Gate status
         self.gate_status = QLabel("Gate: Closed")
-        self.gate_status.setStyleSheet("font-size: 16px; color: #D32F2F;")
+        self.gate_status.setStyleSheet("font-size: 20px; font-weight: bold; color: #D32F2F;")
+        self.gate_status.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.gate_status)
         
         # Last card scan
         self.last_scan = QLabel("Last Scan: None")
         self.last_scan.setStyleSheet("font-size: 16px;")
+        self.last_scan.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(self.last_scan)
-        
-        # Current time
-        self.time_label = QLabel()
-        self.time_label.setStyleSheet("font-size: 16px;")
-        self.update_time()
-        status_layout.addWidget(self.time_label)
-        
-        # Timer for updating time
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_time)
-        self.timer.start(1000)
         
         main_layout.addWidget(status_group)
         
@@ -1419,11 +1405,6 @@ class MainWindow(QMainWindow):
         control_group = QFrame()
         control_group.setFrameStyle(QFrame.StyledPanel)
         control_layout = QVBoxLayout(control_group)
-        
-        # Control header
-        control_header = QLabel("Gate Controls")
-        control_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
-        control_layout.addWidget(control_header)
         
         # Gate control buttons
         gate_buttons = QHBoxLayout()
@@ -1434,8 +1415,9 @@ class MainWindow(QMainWindow):
                 background-color: #4CAF50;
                 color: white;
                 border-radius: 5px;
-                padding: 10px;
-                font-size: 16px;
+                padding: 15px;
+                font-size: 18px;
+                min-width: 150px;
             }
             QPushButton:hover {
                 background-color: #388E3C;
@@ -1449,8 +1431,9 @@ class MainWindow(QMainWindow):
                 background-color: #F44336;
                 color: white;
                 border-radius: 5px;
-                padding: 10px;
-                font-size: 16px;
+                padding: 15px;
+                font-size: 18px;
+                min-width: 150px;
             }
             QPushButton:hover {
                 background-color: #D32F2F;
@@ -1465,13 +1448,15 @@ class MainWindow(QMainWindow):
         # Test buttons
         test_buttons = QHBoxLayout()
         
-        self.test_valid_btn = QPushButton("Test Valid Card")
+        self.test_valid_btn = QPushButton("Test Valid Login")
         self.test_valid_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
                 color: white;
                 border-radius: 5px;
-                padding: 8px;
+                padding: 15px;
+                font-size: 18px;
+                min-width: 150px;
             }
             QPushButton:hover {
                 background-color: #1976D2;
@@ -1479,27 +1464,15 @@ class MainWindow(QMainWindow):
         """)
         self.test_valid_btn.clicked.connect(lambda: self.test_card("A1B2C3D4"))
         
-        self.test_admin_btn = QPushButton("Test Admin Card")
-        self.test_admin_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #9C27B0;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #7B1FA2;
-            }
-        """)
-        self.test_admin_btn.clicked.connect(lambda: self.test_card("ADMIN001"))
-        
-        self.test_invalid_btn = QPushButton("Test Invalid Card")
+        self.test_invalid_btn = QPushButton("Test Invalid Login")
         self.test_invalid_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FF9800;
                 color: white;
                 border-radius: 5px;
-                padding: 8px;
+                padding: 15px;
+                font-size: 18px;
+                min-width: 150px;
             }
             QPushButton:hover {
                 background-color: #F57C00;
@@ -1508,106 +1481,33 @@ class MainWindow(QMainWindow):
         self.test_invalid_btn.clicked.connect(lambda: self.test_card("INVALID"))
         
         test_buttons.addWidget(self.test_valid_btn)
-        test_buttons.addWidget(self.test_admin_btn)
         test_buttons.addWidget(self.test_invalid_btn)
         control_layout.addLayout(test_buttons)
         
-        # Admin functions
-        admin_buttons = QHBoxLayout()
-        
-        self.add_student_btn = QPushButton("Add Student")
-        self.add_student_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #009688;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #00796B;
-            }
-        """)
-        self.add_student_btn.clicked.connect(self.add_student)
-        
-        self.view_logs_btn = QPushButton("View Logs")
-        self.view_logs_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #607D8B;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #455A64;
-            }
-        """)
-        self.view_logs_btn.clicked.connect(self.view_logs)
-        
-        admin_buttons.addWidget(self.add_student_btn)
-        admin_buttons.addWidget(self.view_logs_btn)
-        control_layout.addLayout(admin_buttons)
-        
         main_layout.addWidget(control_group)
-        
-        # Log Section
-        log_group = QFrame()
-        log_group.setFrameStyle(QFrame.StyledPanel)
-        log_layout = QVBoxLayout(log_group)
-        
-        # Log header
-        log_header = QLabel("Recent Activity")
-        log_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
-        log_layout.addWidget(log_header)
-        
-        # Log display
-        self.log_display = QLabel()
-        self.log_display.setStyleSheet("""
-            QLabel {
-                background-color: #F5F5F5;
-                border: 1px solid #BDBDBD;
-                border-radius: 5px;
-                padding: 10px;
-                font-family: monospace;
-            }
-        """)
-        self.log_display.setWordWrap(True)
-        log_layout.addWidget(self.log_display)
-        
-        main_layout.addWidget(log_group)
         
         # Initialize hardware controller
         self.hardware_controller = hardware_controller
-        self.update_log("System initialized")
-    
-    def update_time(self):
-        """Update the time display"""
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.time_label.setText(f"Current Time: {current_time}")
-    
-    def update_log(self, message):
-        """Update the log display"""
-        current_time = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log_display.setText(f"[{current_time}] {message}\n" + self.log_display.text())
     
     def open_gate(self):
         """Open the gate"""
         try:
             self.hardware_controller.open_gate()
             self.gate_status.setText("Gate: Open")
-            self.gate_status.setStyleSheet("font-size: 16px; color: #4CAF50;")
-            self.update_log("Gate opened")
+            self.gate_status.setStyleSheet("font-size: 20px; font-weight: bold; color: #4CAF50;")
+            QApplication.processEvents()  # Force GUI update
         except Exception as e:
-            self.update_log(f"Error opening gate: {e}")
+            print(f"Error opening gate: {e}")
     
     def close_gate(self):
         """Close the gate"""
         try:
             self.hardware_controller.close_gate()
             self.gate_status.setText("Gate: Closed")
-            self.gate_status.setStyleSheet("font-size: 16px; color: #D32F2F;")
-            self.update_log("Gate closed")
+            self.gate_status.setStyleSheet("font-size: 20px; font-weight: bold; color: #D32F2F;")
+            QApplication.processEvents()  # Force GUI update
         except Exception as e:
-            self.update_log(f"Error closing gate: {e}")
+            print(f"Error closing gate: {e}")
     
     def test_card(self, card_id):
         """Test card scanning"""
@@ -1615,69 +1515,21 @@ class MainWindow(QMainWindow):
             student_data = get_student_by_card(card_id)
             if student_data and student_data.get("valid", False):
                 self.last_scan.setText(f"Last Scan: {student_data.get('name', 'Unknown')}")
-                self.update_log(f"Valid card scanned: {student_data.get('name', 'Unknown')}")
                 self.open_gate()
             else:
                 self.last_scan.setText("Last Scan: Invalid Card")
-                self.update_log("Invalid card scanned")
                 self.hardware_controller.trigger_alarm()
+            QApplication.processEvents()  # Force GUI update
         except Exception as e:
-            self.update_log(f"Error testing card: {e}")
-    
-    def add_student(self):
-        """Show dialog to add new student"""
-        dialog = AddEntryDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            data = dialog.get_data()
-            try:
-                if add_new_student(
-                    data["student_id"],
-                    data["name"],
-                    data["faculty"],
-                    data["program"],
-                    data["level"],
-                    data["image_path"]
-                ) and add_new_card(
-                    data["card_id"],
-                    data["student_id"],
-                    data["card_type"]
-                ):
-                    self.update_log(f"Added new student: {data['name']}")
-                else:
-                    self.update_log("Failed to add student")
-            except Exception as e:
-                self.update_log(f"Error adding student: {e}")
-    
-    def view_logs(self):
-        """Show recent entry logs"""
-        try:
-            entries = get_recent_entries(10)
-            log_text = "Recent Entry Logs:\n"
-            for entry in entries:
-                log_text += f"{entry['timestamp']} - {entry['student_name']} - {entry['status']}\n"
-            self.update_log(log_text)
-        except Exception as e:
-            self.update_log(f"Error viewing logs: {e}")
+            print(f"Error testing card: {e}")
 
 # Main execution
 if __name__ == "__main__":
     try:
         logger.info("Starting Smart Gate System")
         
-        # Setup database and create placeholders
+        # Setup database
         setup_database()
-        create_placeholder_images()
-        create_flask_templates()
-        
-        # Start Flask app in a separate thread
-        def run_flask():
-            try:
-                app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
-            except Exception as e:
-                logger.error(f"Error running Flask app: {e}")
-                
-        flask_thread = threading.Thread(target=run_flask, daemon=True)
-        flask_thread.start()
         
         # Start PyQt5 GUI
         app_gui = QApplication(sys.argv)
@@ -1688,18 +1540,10 @@ if __name__ == "__main__":
         def cleanup():
             logger.info("Starting system cleanup")
             try:
-                # Cleanup hardware
                 if 'hardware_controller' in globals():
                     hardware_controller.cleanup()
-                
-                # Cleanup database
                 if 'db_pool' in globals():
                     db_pool.close_all()
-                
-                # Cleanup power management
-                if 'power_manager' in globals():
-                    power_manager.cleanup()
-                
                 logger.info("System cleanup completed")
             except Exception as e:
                 logger.error(f"Error during system cleanup: {e}")
@@ -1714,5 +1558,4 @@ if __name__ == "__main__":
         logger.error(f"Fatal error in main execution: {e}")
         sys.exit(1)
     finally:
-        # Ensure cleanup is called
         cleanup()
