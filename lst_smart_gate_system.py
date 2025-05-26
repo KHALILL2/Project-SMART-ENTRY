@@ -30,7 +30,7 @@ import atexit
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message}s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     filename="smart_gate.log",
     filemode="a"
 )
@@ -1366,7 +1366,8 @@ class StudentInfoScreen(QWidget):
                 self.status_label.setText("Security Staff Identified")
                 self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
                 self.status_frame.setStyleSheet("background-color: #2196F3; border: 2px solid #1565C0;")
-                self.visitor_frame炎.setVisible(True)
+                self.status_frame.setStyleSheet("background-color: #2196F3; border: 2px solid #1565C0;")
+                self.visitor_frame.setVisible(True)
                 log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success", entry_type="admin_scan")
                 self.return_timer.start(30000)
             else:
