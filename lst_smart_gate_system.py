@@ -141,9 +141,12 @@ class HardwareController:
         self.gate_closed = True
         self.relay_state_on = GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH
         self.relay_state_off = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+        self.stop_event = threading.Event()
+        self.gpio_mode_set = False
         
         try:
             GPIO.setmode(GPIO.BCM)
+            self.gpio_mode_set = True
             GPIO.setwarnings(False)
             
             self.RED_LED_PIN = PIN_CONFIG["RED_LED"]
@@ -214,7 +217,7 @@ class HardwareController:
     
     def _scan_nfc(self):
         time.sleep(5)  # Delay to prevent immediate scans on startup
-        while True:
+        while not self.stop_event.is_set():
             try:
                 if not self.pn532:
                     time.sleep(5)
@@ -367,16 +370,23 @@ class HardwareController:
         threading.Thread(target=alarm_sequence, daemon=True).start()
     
     def cleanup(self):
+        self.stop_event.set()  # Signal NFC thread to stop
+        if self.nfc_thread.is_alive():
+            self.nfc_thread.join(timeout=2)  # Wait for thread to finish
+        
         try:
-            self.led_off()
-            self.buzzer_off()
-            self.relay_off()
-            if self.red_led_pwm: self.red_led_pwm.stop()
-            if self.green_led_pwm: self.green_led_pwm.stop()
-            if self.red_buzzer_pwm: self.red_buzzer_pwm.stop()
-            if self.green_buzzer_pwm: self.green_buzzer_pwm.stop()
-            if self.servo: self.servo.fraction = None
-            GPIO.cleanup()
+            if self.gpio_mode_set:
+                self.led_off()
+                self.buzzer_off()
+                self.relay_off()
+                if self.red_led_pwm: self.red_led_pwm.stop()
+                if self.green_led_pwm: self.green_led_pwm.stop()
+                if self.red_buzzer_pwm: self.red_buzzer_pwm.stop()
+                if self.green_buzzer_pwm: self.green_buzzer_pwm.stop()
+                if self.servo: self.servo.fraction = None
+                GPIO.cleanup()
+            else:
+                logger.warning("GPIO mode not set, skipping GPIO cleanup")
             logger.info("Hardware cleanup completed successfully")
         except Exception as e:
             logger.error(f"Error during hardware cleanup: {e}")
@@ -1334,7 +1344,7 @@ class StudentInfoScreen(QWidget):
         layout.addWidget(label)
         layout.addWidget(value)
         layout.setStretch(0, 1)
-        layout.setStretchFactor(1, 2)
+        layout.setStretch(1, 2)
         return frame
     
     def update_datetime(self):
