@@ -9,6 +9,7 @@ import sqlite3
 import datetime
 import threading
 import psutil
+import logging
 import RPi.GPIO as GPIO
 from adafruit_pn532.i2c import PN532_I2C
 import busio
@@ -26,6 +27,28 @@ from PyQt5.QtMultimedia import QSound
 from flask import Flask, render_template, jsonify
 from flask_caching import Cache
 from werkzeug.middleware.proxy_fix import ProxyFix
+import atexit
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename='smart_gate.log'
+)
+logger = logging.getLogger('SmartGate')
+
+# Database configuration
+DB_PATH = os.path.join(os.path.dirname(__file__), "database", "smart_gate.db")
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+# Pin configuration
+PIN_CONFIG = {
+    'RED_LED': 24,      # GPIO24 PIN18
+    'GREEN_LED': 23,    # GPIO23 PIN16
+    'RELAY': 17,        # GPIO17 PIN11
+    'RED_BUZZER': 25,   # GPIO25 PIN22
+    'GREEN_BUZZER': 26  # GPIO26 PIN37
+}
 
 class PowerManagement:
     """Manages system power consumption and performance optimization"""
@@ -149,68 +172,99 @@ class HardwareController:
     """Controls all hardware components connected to Raspberry Pi"""
     
     def __init__(self):
-        # GPIO Setup
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        
-        # Pin Definitions
-        self.RED_LED_PIN = 24      # GPIO24 PIN18
-        self.GREEN_LED_PIN = 23    # GPIO23 PIN16
-        self.RELAY_PIN = 17        # GPIO17 PIN11
-        
-        # Servo Parameters for Three-Arm Gate
-        self.SERVO_CHANNEL = 0     # Channel 0 for the servo
-        self.SERVO_MIN_PULSE = 500  # Minimum pulse length (µs)
-        self.SERVO_MAX_PULSE = 2500 # Maximum pulse length (µs)
-        self.SERVO_FREQ = 50       # 50Hz frequency
-        self.SERVO_SPEED = 0.3     # Speed in seconds per 90 degrees
-        self.SERVO_STEPS = 20      # Steps for smooth movement
-        
-        # Three-arm gate angles (120 degrees between each arm)
-        self.SERVO_CLOSED_ANGLE = 0    # First arm position
-        self.SERVO_OPEN_ANGLE = 120    # Rotate 120 degrees to next arm
-        self.SERVO_FULL_ROTATION = 360 # Full rotation for reference
-        
-        # Setup GPIO pins
-        GPIO.setup(self.RED_LED_PIN, GPIO.OUT)
-        GPIO.setup(self.GREEN_LED_PIN, GPIO.OUT)
-        GPIO.setup(self.RELAY_PIN, GPIO.OUT)
-        
-        # Initialize PWM for LEDs
-        self.red_led_pwm = GPIO.PWM(self.RED_LED_PIN, 100)  # 100 Hz
-        self.green_led_pwm = GPIO.PWM(self.GREEN_LED_PIN, 100)
-        self.red_led_pwm.start(0)
-        self.green_led_pwm.start(0)
-        
-        # Initialize I2C for PN532 NFC reader
-        self.i2c = busio.I2C(board.SCL, board.SDA)
-        self.pn532 = PN532_I2C(self.i2c, debug=False)
-        
-        # Initialize servo controller with custom parameters for three-arm gate
-        self.servo_kit = ServoKit(channels=16, frequency=self.SERVO_FREQ)
-        self.servo = self.servo_kit.servo[self.SERVO_CHANNEL]
-        self.servo.set_pulse_width_range(self.SERVO_MIN_PULSE, self.SERVO_MAX_PULSE)
-        
-        # Set initial states
-        self.gate_closed = True
-        self.led_off()
-        self.relay_off()
-        
-        # Start NFC scanning thread
-        self.nfc_thread = threading.Thread(target=self._scan_nfc, daemon=True)
-        self.nfc_thread.start()
+        try:
+            # GPIO Setup
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            
+            # Pin Definitions from config
+            self.RED_LED_PIN = PIN_CONFIG['RED_LED']
+            self.GREEN_LED_PIN = PIN_CONFIG['GREEN_LED']
+            self.RELAY_PIN = PIN_CONFIG['RELAY']
+            self.RED_BUZZER_PIN = PIN_CONFIG['RED_BUZZER']
+            self.GREEN_BUZZER_PIN = PIN_CONFIG['GREEN_BUZZER']
+            
+            # Servo Parameters for Three-Arm Gate
+            self.SERVO_CHANNEL = 0     # Channel 0 for the servo
+            self.SERVO_MIN_PULSE = 500  # Minimum pulse length (µs)
+            self.SERVO_MAX_PULSE = 2500 # Maximum pulse length (µs)
+            self.SERVO_FREQ = 50       # 50Hz frequency
+            self.SERVO_SPEED = 0.3     # Speed in seconds per 90 degrees
+            self.SERVO_STEPS = 20      # Steps for smooth movement
+            
+            # Three-arm gate angles (120 degrees between each arm)
+            self.SERVO_CLOSED_ANGLE = 0    # First arm position
+            self.SERVO_OPEN_ANGLE = 120    # Rotate 120 degrees to next arm
+            self.SERVO_FULL_ROTATION = 360 # Full rotation for reference
+            
+            # Setup GPIO pins
+            GPIO.setup(self.RED_LED_PIN, GPIO.OUT)
+            GPIO.setup(self.GREEN_LED_PIN, GPIO.OUT)
+            GPIO.setup(self.RELAY_PIN, GPIO.OUT)
+            GPIO.setup(self.RED_BUZZER_PIN, GPIO.OUT)
+            GPIO.setup(self.GREEN_BUZZER_PIN, GPIO.OUT)
+            
+            # Initialize PWM for LEDs and Buzzers
+            self.red_led_pwm = GPIO.PWM(self.RED_LED_PIN, 100)  # 100 Hz
+            self.green_led_pwm = GPIO.PWM(self.GREEN_LED_PIN, 100)
+            self.red_buzzer_pwm = GPIO.PWM(self.RED_BUZZER_PIN, 100)
+            self.green_buzzer_pwm = GPIO.PWM(self.GREEN_BUZZER_PIN, 100)
+            
+            self.red_led_pwm.start(0)
+            self.green_led_pwm.start(0)
+            self.red_buzzer_pwm.start(0)
+            self.green_buzzer_pwm.start(0)
+            
+            # Initialize I2C for PN532 NFC reader
+            try:
+                self.i2c = busio.I2C(board.SCL, board.SDA)
+                self.pn532 = PN532_I2C(self.i2c, debug=False)
+                logger.info("NFC reader initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize NFC reader: {e}")
+                self.pn532 = None
+            
+            # Initialize servo controller
+            try:
+                self.servo_kit = ServoKit(channels=16, frequency=self.SERVO_FREQ)
+                self.servo = self.servo_kit.servo[self.SERVO_CHANNEL]
+                self.servo.set_pulse_width_range(self.SERVO_MIN_PULSE, self.SERVO_MAX_PULSE)
+                logger.info("Servo controller initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize servo controller: {e}")
+                self.servo = None
+            
+            # Set initial states
+            self.gate_closed = True
+            self.led_off()
+            self.buzzer_off()
+            self.relay_off()
+            
+            # Start NFC scanning thread
+            self.nfc_thread = threading.Thread(target=self._scan_nfc, daemon=True)
+            self.nfc_thread.start()
+            logger.info("Hardware controller initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error initializing hardware controller: {e}")
+            raise
     
     def _scan_nfc(self):
         """Continuously scan for NFC cards"""
         while True:
             try:
+                if not self.pn532:
+                    logger.warning("NFC reader not initialized")
+                    time.sleep(5)
+                    continue
+                
                 # Check if a card is available to read
                 uid = self.pn532.read_passive_target(timeout=0.5)
                 
                 if uid is not None:
                     # Convert UID to string
                     card_id = ''.join([hex(i)[2:].upper() for i in uid])
-                    print(f"Found card with UID: {card_id}")
+                    logger.info(f"Found card with UID: {card_id}")
                     
                     # Process card scan
                     self._process_card_scan(card_id)
@@ -218,8 +272,8 @@ class HardwareController:
                     # Wait a bit before next scan
                     time.sleep(1)
             except Exception as e:
-                print(f"Error scanning NFC: {e}")
-                time.sleep(1)
+                logger.error(f"Error scanning NFC: {e}")
+                time.sleep(5)  # Longer delay on error
     
     def _process_card_scan(self, card_id):
         """Process NFC card scan"""
@@ -368,13 +422,35 @@ class HardwareController:
         threading.Thread(target=alarm_sequence, daemon=True).start()
     
     def cleanup(self):
-        """Cleanup GPIO and hardware resources"""
-        self.led_off()
-        self.buzzer_off()
-        self.relay_off()
-        self.red_buzzer_pwm.stop()
-        self.green_buzzer_pwm.stop()
-        GPIO.cleanup()
+        """Cleanup hardware resources"""
+        try:
+            logger.info("Starting hardware cleanup")
+            
+            # Stop NFC scanning thread
+            if hasattr(self, 'nfc_thread'):
+                self.nfc_thread.join(timeout=1)
+            
+            # Turn off all outputs
+            self.led_off()
+            self.buzzer_off()
+            self.relay_off()
+            
+            # Stop PWM
+            if hasattr(self, 'red_led_pwm'):
+                self.red_led_pwm.stop()
+            if hasattr(self, 'green_led_pwm'):
+                self.green_led_pwm.stop()
+            if hasattr(self, 'red_buzzer_pwm'):
+                self.red_buzzer_pwm.stop()
+            if hasattr(self, 'green_buzzer_pwm'):
+                self.green_buzzer_pwm.stop()
+            
+            # Cleanup GPIO
+            GPIO.cleanup()
+            
+            logger.info("Hardware cleanup completed successfully")
+        except Exception as e:
+            logger.error(f"Error during hardware cleanup: {e}")
 
 # Create global hardware controller instance
 hardware_controller = HardwareController()
@@ -423,9 +499,6 @@ os.makedirs("templates", exist_ok=True)
 os.makedirs("static/css", exist_ok=True)
 os.makedirs("static/js", exist_ok=True)
 
-# Database setup
-DB_PATH = "database/smart_gate.db"
-
 class DatabasePool:
     """Database connection pool for optimized database access"""
     
@@ -439,6 +512,7 @@ class DatabasePool:
             conn = self._create_connection()
             if conn:
                 self.connections.append(conn)
+        logger.info(f"Database pool initialized with {len(self.connections)} connections")
     
     def _create_connection(self):
         """Create a new database connection with optimized settings"""
@@ -452,30 +526,54 @@ class DatabasePool:
             conn.execute("PRAGMA page_size=4096")  # Optimal page size
             return conn
         except Exception as e:
-            print(f"Error creating database connection: {e}")
+            logger.error(f"Error creating database connection: {e}")
             return None
     
     def get_connection(self):
         """Get a connection from the pool"""
         with self.lock:
             if self.connections:
-                return self.connections.pop()
+                conn = self.connections.pop()
+                try:
+                    # Test if connection is still valid
+                    conn.execute("SELECT 1")
+                    return conn
+                except Exception:
+                    # If connection is invalid, create a new one
+                    logger.warning("Invalid connection found in pool, creating new connection")
+                    return self._create_connection()
             return self._create_connection()
     
     def return_connection(self, conn):
         """Return a connection to the pool"""
+        if conn is None:
+            return
+            
         with self.lock:
-            if len(self.connections) < self.max_connections:
-                self.connections.append(conn)
-            else:
-                conn.close()
+            try:
+                # Test if connection is still valid
+                conn.execute("SELECT 1")
+                if len(self.connections) < self.max_connections:
+                    self.connections.append(conn)
+                else:
+                    conn.close()
+            except Exception as e:
+                logger.error(f"Error returning connection to pool: {e}")
+                try:
+                    conn.close()
+                except:
+                    pass
     
     def close_all(self):
         """Close all connections in the pool"""
         with self.lock:
             for conn in self.connections:
-                conn.close()
+                try:
+                    conn.close()
+                except Exception as e:
+                    logger.error(f"Error closing connection: {e}")
             self.connections.clear()
+            logger.info("All database connections closed")
 
 # Create global database pool
 db_pool = DatabasePool()
@@ -2249,6 +2347,8 @@ class MainWindow(QMainWindow):
 # Main execution
 if __name__ == "__main__":
     try:
+        logger.info("Starting Smart Gate System")
+        
         # Setup database and create placeholders
         setup_database()
         create_placeholder_images()
@@ -2259,7 +2359,7 @@ if __name__ == "__main__":
             try:
                 app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
             except Exception as e:
-                print(f"Error running Flask app: {e}")
+                logger.error(f"Error running Flask app: {e}")
                 
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
@@ -2268,7 +2368,36 @@ if __name__ == "__main__":
         app_gui = QApplication(sys.argv)
         main_window = MainWindow()
         main_window.show()
+        
+        # Set up cleanup on exit
+        def cleanup():
+            logger.info("Starting system cleanup")
+            try:
+                # Cleanup hardware
+                if 'hardware_controller' in globals():
+                    hardware_controller.cleanup()
+                
+                # Cleanup database
+                if 'db_pool' in globals():
+                    db_pool.close_all()
+                
+                # Cleanup power management
+                if 'power_manager' in globals():
+                    power_manager.cleanup()
+                
+                logger.info("System cleanup completed")
+            except Exception as e:
+                logger.error(f"Error during system cleanup: {e}")
+        
+        # Register cleanup function
+        atexit.register(cleanup)
+        
+        # Run the application
         sys.exit(app_gui.exec_())
+        
+    except Exception as e:
+        logger.error(f"Fatal error in main execution: {e}")
+        sys.exit(1)
     finally:
-        # Cleanup
-        db_pool.close_all()
+        # Ensure cleanup is called
+        cleanup()
