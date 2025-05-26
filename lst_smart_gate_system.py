@@ -1547,8 +1547,7 @@ class AdminScreen(QWidget):
             layout.addWidget(submit_button)
             dialog.setLayout(layout)
             dialog.exec_()
-        except:
-            Exception as e:
+        except Exception as e:
             logger.error(f"Error opening add new card dialog: {e}")
             QMessageBox.critical(self, "Error", "Failed to open card creation dialog.")
     
