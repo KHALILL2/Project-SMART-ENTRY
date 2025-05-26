@@ -171,118 +171,210 @@ power_manager = PowerManagement()
 class HardwareController:
     """Controls all hardware components connected to Raspberry Pi"""
     
-    def __init__(self, config_obj: Config) -> None:
-        self.config = config_obj
-        self.servo = None
-        self.fan_running = False
-        self.buzzer_running = False
-        self.lock_engaged = True  # Default state is locked
-        self.green_led_on = False
-        self.red_led_on = False
-        
-        # Initialize GPIO
-        if GPIO_AVAILABLE:
+    def __init__(self):
+        try:
+            # GPIO Setup
             GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)  # Disable warnings to prevent runtime errors
+            GPIO.setwarnings(False)
             
-            # Setup pins
-            GPIO.setup(self.config.SERVO_PIN, GPIO.OUT)
-            GPIO.setup(self.config.FAN_PIN, GPIO.OUT)
-            GPIO.setup(self.config.BUZZER_PIN, GPIO.OUT)
-            GPIO.setup(self.config.SOLENOID_PIN, GPIO.OUT)
-            GPIO.setup(self.config.LED_GREEN_PIN, GPIO.OUT)
-            GPIO.setup(self.config.LED_RED_PIN, GPIO.OUT)
+            # Pin Definitions from config
+            self.RED_LED_PIN = PIN_CONFIG['RED_LED']
+            self.GREEN_LED_PIN = PIN_CONFIG['GREEN_LED']
+            self.RELAY_PIN = PIN_CONFIG['RELAY']
+            self.RED_BUZZER_PIN = PIN_CONFIG['RED_BUZZER']
+            self.GREEN_BUZZER_PIN = PIN_CONFIG['GREEN_BUZZER']
             
-            # Initialize servo with improved settings
-            self.servo = GPIO.PWM(self.config.SERVO_PIN, 50)  # 50Hz frequency
-            self.servo.start(0)  # Start with 0 duty cycle
+            # Servo Parameters for Three-Arm Gate
+            self.SERVO_CHANNEL = 0     # Channel 0 for the servo
+            self.SERVO_MIN_PULSE = 500  # Minimum pulse length (µs)
+            self.SERVO_MAX_PULSE = 2500 # Maximum pulse length (µs)
+            self.SERVO_FREQ = 50       # 50Hz frequency
+            self.SERVO_SPEED = 0.3     # Speed in seconds per 90 degrees
+            self.SERVO_STEPS = 20      # Steps for smooth movement
             
-            # Servo movement parameters
-            self.SERVO_STEPS = 20  # Number of steps for smooth movement
-            self.SERVO_DELAY = 0.05  # Delay between steps (50ms)
+            # Three-arm gate angles (120 degrees between each arm)
+            self.SERVO_CLOSED_ANGLE = 0    # First arm position
+            self.SERVO_OPEN_ANGLE = 120    # Rotate 120 degrees to next arm
+            self.SERVO_FULL_ROTATION = 360 # Full rotation for reference
             
-            # Initialize LEDs (off by default)
-            GPIO.output(self.config.LED_GREEN_PIN, GPIO.LOW)
-            GPIO.output(self.config.LED_RED_PIN, GPIO.LOW)
+            # Setup GPIO pins
+            GPIO.setup(self.RED_LED_PIN, GPIO.OUT)
+            GPIO.setup(self.GREEN_LED_PIN, GPIO.OUT)
+            GPIO.setup(self.RELAY_PIN, GPIO.OUT)
+            GPIO.setup(self.RED_BUZZER_PIN, GPIO.OUT)
+            GPIO.setup(self.GREEN_BUZZER_PIN, GPIO.OUT)
             
-            # Initialize solenoid lock (HIGH = locked, LOW = unlocked)
-            os.system('gpio -g mode 27 out')
-            os.system('gpio -g write 27 1')  # Set to HIGH (locked) by default
-            GPIO.output(self.config.SOLENOID_PIN, GPIO.HIGH)  # Start with lock engaged
+            # Initialize PWM for LEDs and Buzzers
+            self.red_led_pwm = GPIO.PWM(self.RED_LED_PIN, 100)  # 100 Hz
+            self.green_led_pwm = GPIO.PWM(self.GREEN_LED_PIN, 100)
+            self.red_buzzer_pwm = GPIO.PWM(self.RED_BUZZER_PIN, 100)
+            self.green_buzzer_pwm = GPIO.PWM(self.GREEN_BUZZER_PIN, 100)
             
-        self.temp_monitor_thread = threading.Thread(target=self._monitor_temperature)
-        self.temp_monitor_thread.daemon = True
-        self.temp_monitor_thread.start()
+            self.red_led_pwm.start(0)
+            self.green_led_pwm.start(0)
+            self.red_buzzer_pwm.start(0)
+            self.green_buzzer_pwm.start(0)
+            
+            # Initialize I2C for PN532 NFC reader
+            try:
+                self.i2c = busio.I2C(board.SCL, board.SDA)
+                self.pn532 = PN532_I2C(self.i2c, debug=False)
+                logger.info("NFC reader initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize NFC reader: {e}")
+                self.pn532 = None
+            
+            # Initialize servo controller
+            try:
+                self.servo_kit = ServoKit(channels=16, frequency=self.SERVO_FREQ)
+                self.servo = self.servo_kit.servo[self.SERVO_CHANNEL]
+                self.servo.set_pulse_width_range(self.SERVO_MIN_PULSE, self.SERVO_MAX_PULSE)
+                logger.info("Servo controller initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize servo controller: {e}")
+                self.servo = None
+            
+            # Set initial states
+            self.gate_closed = True
+            self.led_off()
+            self.buzzer_off()
+            self.relay_off()
+            
+            # Start NFC scanning thread
+            self.nfc_thread = threading.Thread(target=self._scan_nfc, daemon=True)
+            self.nfc_thread.start()
+            logger.info("Hardware controller initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error initializing hardware controller: {e}")
+            raise
     
-    def _move_servo_smoothly(self, start_duty: float, end_duty: float) -> None:
-        """Move servo smoothly from start to end duty cycle"""
-        if not GPIO_AVAILABLE:
-            print(f"MockGPIO: Moving servo from {start_duty} to {end_duty}")
-            return
-            
-        try:
-            # Calculate step size
-            step_size = (end_duty - start_duty) / self.SERVO_STEPS
-            
-            # Move servo in steps
-            for i in range(self.SERVO_STEPS + 1):
-                current_duty = start_duty + (step_size * i)
-                self.servo.ChangeDutyCycle(current_duty)
-                time.sleep(self.SERVO_DELAY)
-            
-            # Hold position briefly
-            time.sleep(0.1)
-            
-            # Stop PWM to prevent jitter
-            self.servo.ChangeDutyCycle(0)
-            
-        except Exception as e:
-            logger.log_error(e, "Failed to move servo smoothly")
-            # Ensure servo is stopped in case of error
-            if GPIO_AVAILABLE:
-                self.servo.ChangeDutyCycle(0)
-
-    def open_gate(self) -> None:
-        """Open the gate with smooth movement"""
-        if not GPIO_AVAILABLE:
-            print("MockGPIO: Opening gate")
-            return
+    def _scan_nfc(self):
+        """Continuously scan for NFC cards"""
+        while True:
+            try:
+                if not self.pn532:
+                    logger.warning("NFC reader not initialized")
+                    time.sleep(5)
+                    continue
+                
+                # Check if a card is available to read
+                uid = self.pn532.read_passive_target(timeout=0.5)
+                
+                if uid is not None:
+                    # Convert UID to string
+                    card_id = ''.join([hex(i)[2:].upper() for i in uid])
+                    logger.info(f"Found card with UID: {card_id}")
+                    
+                    # Process card scan
+                    self._process_card_scan(card_id)
+                    
+                    # Wait a bit before next scan
+                    time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error scanning NFC: {e}")
+                time.sleep(5)  # Longer delay on error
+    
+    def _process_card_scan(self, card_id):
+        """Process NFC card scan"""
+        # Get student data
+        student_data = get_student_by_card(card_id)
         
-        try:
-            # Move servo smoothly from close to open position
-            self._move_servo_smoothly(self.config.SERVO_CLOSE_DUTY, self.config.SERVO_OPEN_DUTY)
-            logger.log_info("Gate opened successfully")
-        except Exception as e:
-            logger.log_error(e, "Failed to open gate")
-
-    def close_gate(self) -> None:
-        """Close the gate with smooth movement"""
-        if not GPIO_AVAILABLE:
-            print("MockGPIO: Closing gate")
-            return
-        
-        try:
-            # Move servo smoothly from open to close position
-            self._move_servo_smoothly(self.config.SERVO_OPEN_DUTY, self.config.SERVO_CLOSE_DUTY)
-            logger.log_info("Gate closed successfully")
-        except Exception as e:
-            logger.log_error(e, "Failed to close gate")
-
+        if student_data and student_data.get("valid", False):
+            # Valid card
+            self.green_led_on()
+            self.green_buzzer_on()
+            self.open_gate()
+            
+            # Log successful entry
+            log_entry(card_id, student_data.get("id", "UNKNOWN"), "success")
+            
+            # Close gate after delay
+            threading.Timer(5, self.close_gate).start()
+        else:
+            # Invalid card
+            self.red_led_on()
+            self.red_buzzer_on()
+            
+            # Log failed entry
+            log_entry(card_id, "UNKNOWN", "failure")
+            
+            # Trigger alarm
+            self.trigger_alarm()
+    
+    def open_gate(self):
+        """Open the gate using servo with controlled speed and increased torque"""
+        if self.gate_closed:
+            try:
+                # Activate relay with delay to ensure stable power
+                time.sleep(0.2)
+                self.relay_on()
+                time.sleep(0.2)  # Wait for relay to stabilize
+                
+                # Calculate steps for smooth movement with heavy load
+                current_angle = self.servo.angle if self.servo.angle is not None else self.SERVO_CLOSED_ANGLE
+                angle_step = (self.SERVO_OPEN_ANGLE - current_angle) / self.SERVO_STEPS
+                delay = self.SERVO_SPEED / self.SERVO_STEPS
+                
+                # Move servo smoothly with increased torque
+                for i in range(self.SERVO_STEPS):
+                    target_angle = current_angle + (angle_step * (i + 1))
+                    self.servo.angle = target_angle
+                    time.sleep(delay)
+                
+                # Hold position briefly to ensure stability
+                time.sleep(0.5)
+                
+                self.gate_closed = False
+                print("Gate opened")
+            except Exception as e:
+                print(f"Error opening gate: {e}")
+                # Ensure relay is off in case of error
+                self.relay_off()
+    
+    def close_gate(self):
+        """Close the gate using servo with controlled speed and increased torque"""
+        if not self.gate_closed:
+            try:
+                # Calculate steps for smooth movement with heavy load
+                current_angle = self.servo.angle if self.servo.angle is not None else self.SERVO_OPEN_ANGLE
+                angle_step = (self.SERVO_CLOSED_ANGLE - current_angle) / self.SERVO_STEPS
+                delay = self.SERVO_SPEED / self.SERVO_STEPS
+                
+                # Move servo smoothly with increased torque
+                for i in range(self.SERVO_STEPS):
+                    target_angle = current_angle + (angle_step * (i + 1))
+                    self.servo.angle = target_angle
+                    time.sleep(delay)
+                
+                # Hold position briefly to ensure stability
+                time.sleep(0.5)
+                
+                # Deactivate relay after servo movement
+                self.relay_off()
+                
+                self.gate_closed = True
+                print("Gate closed")
+            except Exception as e:
+                print(f"Error closing gate: {e}")
+                # Ensure relay is off in case of error
+                self.relay_off()
+    
     def green_led_on(self):
         """Turn on green LED"""
-        GPIO.output(self.config.LED_GREEN_PIN, GPIO.HIGH)
+        GPIO.output(self.GREEN_LED_PIN, GPIO.HIGH)
     
     def green_led_off(self):
         """Turn off green LED"""
-        GPIO.output(self.config.LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(self.GREEN_LED_PIN, GPIO.LOW)
     
     def red_led_on(self):
         """Turn on red LED"""
-        GPIO.output(self.config.LED_RED_PIN, GPIO.HIGH)
+        GPIO.output(self.RED_LED_PIN, GPIO.HIGH)
     
     def red_led_off(self):
         """Turn off red LED"""
-        GPIO.output(self.config.LED_RED_PIN, GPIO.LOW)
+        GPIO.output(self.RED_LED_PIN, GPIO.LOW)
     
     def led_off(self):
         """Turn off all LEDs"""
@@ -291,19 +383,19 @@ class HardwareController:
     
     def green_buzzer_on(self):
         """Turn on green buzzer"""
-        GPIO.output(self.config.BUZZER_PIN, GPIO.HIGH)
+        self.green_buzzer_pwm.ChangeDutyCycle(50)  # 50% duty cycle
     
     def green_buzzer_off(self):
         """Turn off green buzzer"""
-        GPIO.output(self.config.BUZZER_PIN, GPIO.LOW)
+        self.green_buzzer_pwm.ChangeDutyCycle(0)
     
     def red_buzzer_on(self):
         """Turn on red buzzer"""
-        GPIO.output(self.config.BUZZER_PIN, GPIO.HIGH)
+        self.red_buzzer_pwm.ChangeDutyCycle(50)  # 50% duty cycle
     
     def red_buzzer_off(self):
         """Turn off red buzzer"""
-        GPIO.output(self.config.BUZZER_PIN, GPIO.LOW)
+        self.red_buzzer_pwm.ChangeDutyCycle(0)
     
     def buzzer_off(self):
         """Turn off all buzzers"""
@@ -312,11 +404,11 @@ class HardwareController:
     
     def relay_on(self):
         """Turn on relay"""
-        GPIO.output(self.config.RELAY_PIN, GPIO.HIGH)
+        GPIO.output(self.RELAY_PIN, GPIO.HIGH)
     
     def relay_off(self):
         """Turn off relay"""
-        GPIO.output(self.config.RELAY_PIN, GPIO.LOW)
+        GPIO.output(self.RELAY_PIN, GPIO.LOW)
     
     def trigger_alarm(self):
         """Trigger alarm sequence"""
@@ -334,14 +426,24 @@ class HardwareController:
         try:
             logger.info("Starting hardware cleanup")
             
+            # Stop NFC scanning thread
+            if hasattr(self, 'nfc_thread'):
+                self.nfc_thread.join(timeout=1)
+            
             # Turn off all outputs
             self.led_off()
             self.buzzer_off()
             self.relay_off()
             
             # Stop PWM
-            if hasattr(self, 'servo'):
-                self.servo.stop()
+            if hasattr(self, 'red_led_pwm'):
+                self.red_led_pwm.stop()
+            if hasattr(self, 'green_led_pwm'):
+                self.green_led_pwm.stop()
+            if hasattr(self, 'red_buzzer_pwm'):
+                self.red_buzzer_pwm.stop()
+            if hasattr(self, 'green_buzzer_pwm'):
+                self.green_buzzer_pwm.stop()
             
             # Cleanup GPIO
             GPIO.cleanup()
