@@ -1366,624 +1366,121 @@ def add_new_student(student_id, name, faculty="", program="", level="", image_pa
     finally:
         db_pool.return_connection(conn)
 
-# PyQt5 GUI Classes
-class MainScreen(QWidget):
-    """Main screen for the smart gate"""
+class MainWindow(QMainWindow):
+    """Main application window with simplified single-screen interface"""
     
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.init_ui()
-    
-    def init_ui(self):
-        """Setup the user interface"""
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Smart Gate Control System")
+        self.setGeometry(100, 100, 800, 600)
+        
+        # Create central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
         # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(20)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(10)
         
-        # Header with date and time
-        header_layout = QHBoxLayout()
+        # Status Section
+        status_group = QFrame()
+        status_group.setFrameStyle(QFrame.StyledPanel)
+        status_layout = QVBoxLayout(status_group)
         
-        # Admin button
-        admin_button = QPushButton("Admin")
-        admin_button.setFixedSize(100, 40)
-        admin_button.setStyleSheet("""
-            QPushButton {
-                background-color: #1A237E;
-                color: white;
-                border-radius: 5px;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background-color: #0D47A1;
-            }
-            QPushButton:pressed {
-                background-color: #0A2472;
-            }
-        """)
-        admin_button.clicked.connect(self.show_admin_screen)
+        # Status header
+        status_header = QLabel("System Status")
+        status_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
+        status_layout.addWidget(status_header)
         
-        # Date and time
-        self.datetime_label = QLabel()
-        self.datetime_label.setAlignment(Qt.AlignRight)
-        self.datetime_label.setStyleSheet("font-size: 16px; color: #1A237E;")
-        self.update_datetime()
+        # Gate status
+        self.gate_status = QLabel("Gate: Closed")
+        self.gate_status.setStyleSheet("font-size: 16px; color: #D32F2F;")
+        status_layout.addWidget(self.gate_status)
         
-        # Timer to update date and time
-        self.datetime_timer = QTimer(self)
-        self.datetime_timer.timeout.connect(self.update_datetime)
-        self.datetime_timer.start(1000)  # Update every second
+        # Last card scan
+        self.last_scan = QLabel("Last Scan: None")
+        self.last_scan.setStyleSheet("font-size: 16px;")
+        status_layout.addWidget(self.last_scan)
         
-        header_layout.addWidget(admin_button)
-        header_layout.addStretch()
-        header_layout.addWidget(self.datetime_label)
+        # Current time
+        self.time_label = QLabel()
+        self.time_label.setStyleSheet("font-size: 16px;")
+        self.update_time()
+        status_layout.addWidget(self.time_label)
         
-        # University logo
-        logo_layout = QVBoxLayout()
-        logo_layout.setAlignment(Qt.AlignCenter)
+        # Timer for updating time
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_time)
+        self.timer.start(1000)
         
-        logo_frame = QFrame()
-        logo_frame.setFrameShape(QFrame.Box)
-        logo_frame.setFrameShadow(QFrame.Raised)
-        logo_frame.setLineWidth(2)
-        logo_frame.setStyleSheet("border: 2px solid #1A237E;")
-        logo_frame.setFixedSize(200, 200)
+        main_layout.addWidget(status_group)
         
-        logo_inner_layout = QVBoxLayout(logo_frame)
-        logo_label = QLabel()
-        logo_label.setAlignment(Qt.AlignCenter)
+        # Control Section
+        control_group = QFrame()
+        control_group.setFrameStyle(QFrame.StyledPanel)
+        control_layout = QVBoxLayout(control_group)
         
-        # Load logo image
-        logo_path = "assets/university_logo_placeholder.png"
-        pixmap = QPixmap(logo_path)
-        if pixmap.isNull():
-            # If image not found, use text instead
-            logo_label.setText("University Logo")
-            logo_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #1A237E;")
-        else:
-            pixmap = pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo_label.setPixmap(pixmap)
+        # Control header
+        control_header = QLabel("Gate Controls")
+        control_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
+        control_layout.addWidget(control_header)
         
-        logo_inner_layout.addWidget(logo_label)
-        logo_layout.addWidget(logo_frame)
+        # Gate control buttons
+        gate_buttons = QHBoxLayout()
         
-        # Welcome message
-        welcome_label = QLabel("Welcome to Smart Entry Gate")
-        welcome_label.setAlignment(Qt.AlignCenter)
-        welcome_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #1A237E; margin: 20px 0;")
-        
-        # Instructions
-        instructions_frame = QFrame()
-        instructions_frame.setFrameShape(QFrame.Box)
-        instructions_frame.setFrameShadow(QFrame.Sunken)
-        instructions_frame.setLineWidth(1)
-        instructions_frame.setStyleSheet("border: 1px solid #BDBDBD; background-color: #E8EAF6; padding: 10px;")
-        
-        instructions_layout = QVBoxLayout(instructions_frame)
-        
-        instruction_title = QLabel("Instructions:")
-        instruction_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
-        
-        instruction_text = QLabel("Please scan your NFC card to enter")
-        instruction_text.setAlignment(Qt.AlignCenter)
-        instruction_text.setStyleSheet("font-size: 16px; color: #1A237E; margin: 10px 0;")
-        
-        instructions_layout.addWidget(instruction_title)
-        instructions_layout.addWidget(instruction_text)
-        
-        # Add elements to main layout
-        main_layout.addLayout(header_layout)
-        main_layout.addLayout(logo_layout)
-        main_layout.addWidget(welcome_label)
-        main_layout.addStretch()
-        main_layout.addWidget(instructions_frame)
-        
-        self.setLayout(main_layout)
-    
-    def update_datetime(self):
-        """Update date and time display"""
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y/%m/%d")
-        time_str = now.strftime("%H:%M:%S")
-        self.datetime_label.setText(f"{date_str} {time_str}")
-    
-    def show_admin_screen(self):
-        """Show the admin screen"""
-        if self.parent:
-            self.parent.show_admin_screen()
-
-class StudentInfoScreen(QWidget):
-    """Student information display screen"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.init_ui()
-        
-        # Timer for automatic return to main screen
-        self.return_timer = QTimer(self)
-        self.return_timer.timeout.connect(self.return_to_main)
-        self.return_timer.setSingleShot(True)
-        
-        # For visitor access mode
-        self.visitor_mode = False
-    
-    def init_ui(self):
-        """Setup the user interface"""
-        # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
-        
-        # Header bar
-        header_layout = QHBoxLayout()
-        
-        # Back button
-        back_button = QPushButton("Back")
-        back_button.setFixedSize(100, 40)
-        back_button.setStyleSheet("""
-            QPushButton {
-                background-color: #607D8B;
-                color: white;
-                border-radius: 5px;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background-color: #455A64;
-            }
-            QPushButton:pressed {
-                background-color: #37474F;
-            }
-        """)
-        back_button.clicked.connect(self.return_to_main)
-        
-        # Date and time
-        self.datetime_label = QLabel()
-        self.datetime_label.setAlignment(Qt.AlignRight)
-        self.datetime_label.setStyleSheet("font-size: 16px; color: #1A237E;")
-        self.update_datetime()
-        
-        # Timer to update date and time
-        self.datetime_timer = QTimer(self)
-        self.datetime_timer.timeout.connect(self.update_datetime)
-        self.datetime_timer.start(1000)  # Update every second
-        
-        header_layout.addWidget(back_button)
-        header_layout.addStretch()
-        header_layout.addWidget(self.datetime_label)
-        
-        # Student information content
-        content_layout = QHBoxLayout()
-        
-        # Student image
-        self.student_image_frame = QFrame()
-        self.student_image_frame.setFrameShape(QFrame.Box)
-        self.student_image_frame.setFrameShadow(QFrame.Raised)
-        self.student_image_frame.setLineWidth(2)
-        self.student_image_frame.setStyleSheet("border: 2px solid #1A237E;")
-        self.student_image_frame.setFixedSize(200, 200)
-        
-        image_layout = QVBoxLayout(self.student_image_frame)
-        self.student_image_label = QLabel()
-        self.student_image_label.setAlignment(Qt.AlignCenter)
-        image_layout.addWidget(self.student_image_label)
-        
-        # Student information
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(10)
-        
-        # Create information fields
-        self.name_label = self.create_info_field("Name:")
-        self.id_label = self.create_info_field("ID:")
-        self.faculty_label = self.create_info_field("Faculty:")
-        self.program_label = self.create_info_field("Program:")
-        self.level_label = self.create_info_field("Level:")
-        
-        info_layout.addWidget(self.name_label)
-        info_layout.addWidget(self.id_label)
-        info_layout.addWidget(self.faculty_label)
-        info_layout.addWidget(self.program_label)
-        info_layout.addWidget(self.level_label)
-        info_layout.addStretch()
-        
-        content_layout.addWidget(self.student_image_frame)
-        content_layout.addSpacing(20)
-        content_layout.addLayout(info_layout)
-        
-        # Entry status
-        self.status_frame = QFrame()
-        self.status_frame.setFrameShape(QFrame.Panel)
-        self.status_frame.setFrameShadow(QFrame.Raised)
-        self.status_frame.setLineWidth(2)
-        self.status_frame.setFixedHeight(60)
-        
-        status_layout = QHBoxLayout(self.status_frame)
-        self.status_label = QLabel()
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("font-size: 20px; font-weight: bold;")
-        status_layout.addWidget(self.status_label)
-        
-        # Visitor access section (initially hidden)
-        self.visitor_frame = QFrame()
-        self.visitor_frame.setFrameShape(QFrame.Panel)
-        self.visitor_frame.setFrameShadow(QFrame.Raised)
-        self.visitor_frame.setLineWidth(2)
-        self.visitor_frame.setStyleSheet("background-color: #E1F5FE; border: 2px solid #0288D1;")
-        self.visitor_frame.setVisible(False)
-        
-        visitor_layout = QVBoxLayout(self.visitor_frame)
-        
-        visitor_title = QLabel("Visitor Access Mode")
-        visitor_title.setAlignment(Qt.AlignCenter)
-        visitor_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #01579B;")
-        
-        visitor_instruction = QLabel("Press the button below to grant access to a visitor")
-        visitor_instruction.setAlignment(Qt.AlignCenter)
-        visitor_instruction.setStyleSheet("font-size: 14px; color: #0277BD;")
-        
-        self.grant_access_button = QPushButton("Grant Visitor Access")
-        self.grant_access_button.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border-radius: 5px;
-                font-size: 16px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-            QPushButton:pressed {
-                background-color: #1565C0;
-            }
-        """)
-        self.grant_access_button.clicked.connect(self.grant_visitor_access)
-        
-        visitor_layout.addWidget(visitor_title)
-        visitor_layout.addWidget(visitor_instruction)
-        visitor_layout.addWidget(self.grant_access_button)
-        
-        # Add elements to main layout
-        main_layout.addLayout(header_layout)
-        main_layout.addSpacing(10)
-        main_layout.addLayout(content_layout)
-        main_layout.addStretch()
-        main_layout.addWidget(self.status_frame)
-        main_layout.addWidget(self.visitor_frame)
-        
-        self.setLayout(main_layout)
-    
-    def create_info_field(self, label_text):
-        """Create an information field"""
-        frame = QFrame()
-        frame.setFrameShape(QFrame.Box)
-        frame.setFrameShadow(QFrame.Sunken)
-        frame.setLineWidth(1)
-        frame.setStyleSheet("border: 1px solid #BDBDBD; background-color: white;")
-        
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(10, 5, 10, 5)
-        
-        label = QLabel(label_text)
-        label.setStyleSheet("font-size: 16px; font-weight: bold; border: none; background-color: transparent;")
-        
-        value = QLabel()
-        value.setStyleSheet("font-size: 16px; border: none; background-color: transparent;")
-        
-        layout.addWidget(label)
-        layout.addWidget(value)
-        layout.setStretch(0, 1)
-        layout.setStretch(1, 2)
-        
-        return frame
-    
-    def update_datetime(self):
-        """Update date and time display"""
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y/%m/%d")
-        time_str = now.strftime("%H:%M:%S")
-        self.datetime_label.setText(f"{date_str} {time_str}")
-    
-    def update_student_info(self, student_data):
-        """Update student information display"""
-        # Store current student data
-        self.current_student_data = student_data
-        
-        # Check if this is an admin card
-        is_admin_card = student_data.get("card_type") == "admin"
-        self.visitor_mode = is_admin_card
-        
-        # Update image
-        image_path = student_data.get("image_path", "assets/student_placeholder.png")
-        pixmap = QPixmap(image_path)
-        if pixmap.isNull():
-            # If image not found, use text instead
-            self.student_image_label.setText("No Image")
-            self.student_image_label.setStyleSheet("font-size: 16px;")
-        else:
-            pixmap = pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.student_image_label.setPixmap(pixmap)
-        
-        # Update information
-        self.name_label.layout().itemAt(1).widget().setText(student_data.get("name", ""))
-        self.id_label.layout().itemAt(1).widget().setText(student_data.get("id", ""))
-        self.faculty_label.layout().itemAt(1).widget().setText(student_data.get("faculty", ""))
-        self.program_label.layout().itemAt(1).widget().setText(student_data.get("program", ""))
-        self.level_label.layout().itemAt(1).widget().setText(student_data.get("level", ""))
-        
-        # Update entry status
-        is_valid = student_data.get("valid", False)
-        
-        if is_valid:
-            if is_admin_card:
-                # Admin card - show visitor access mode
-                self.status_label.setText("Security Staff Identified")
-                self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
-                self.status_frame.setStyleSheet("background-color: #2196F3; border: 2px solid #1565C0;")
-                self.visitor_frame.setVisible(True)
-                
-                # Log admin card scan
-                log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success", entry_type="admin_scan")
-                
-                # Don't activate entry yet - wait for visitor access button
-                self.return_timer.start(30000)  # 30 seconds timeout for admin mode
-            else:
-                # Regular student card - grant access
-                self.status_label.setText("Access Granted")
-                self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
-                self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #388E3C;")
-                self.visitor_frame.setVisible(False)
-                
-                # Log successful entry
-                log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success")
-                
-                # Open gate
-                hardware_controller.open_gate()
-                
-                # Return to main screen after delay
-                self.return_timer.start(5000)  # 5 seconds
-                
-                # Close gate after entry
-                QTimer.singleShot(6000, hardware_controller.close_gate)
-        else:
-            # Invalid card
-            self.status_label.setText("Access Denied")
-            self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
-            self.status_frame.setStyleSheet("background-color: #F44336; border: 2px solid #D32F2F;")
-            self.visitor_frame.setVisible(False)
-            
-            # Log failed entry
-            log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "failure")
-            
-            # Trigger alarm for invalid access attempt
-            hardware_controller.trigger_alarm()
-            
-            # Return to main screen after delay
-            self.return_timer.start(5000)  # 5 seconds
-            
-            # Stop alarm when returning to main screen
-            QTimer.singleShot(5000, hardware_controller.buzzer_off)
-    
-    def grant_visitor_access(self):
-        """Grant access for a visitor"""
-        if self.visitor_mode and self.current_student_data:
-            print("Granting visitor access...")
-            
-            # Log visitor access
-            log_entry(
-                self.current_student_data.get("card_id", "ADMIN"), 
-                self.current_student_data.get("id", "ADMIN"), 
-                "success", 
-                entry_type="visitor_access"
-            )
-            
-            # Update status display
-            self.status_label.setText("Visitor Access Granted")
-            self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
-            self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #388E3C;")
-            self.visitor_frame.setVisible(False)
-            
-            # Open gate
-            hardware_controller.open_gate()
-            
-            # Return to main screen after delay
-            self.return_timer.start(5000)  # 5 seconds
-            
-            # Close gate after entry
-            QTimer.singleShot(6000, hardware_controller.close_gate)
-        else:
-            print("Error: Cannot grant visitor access in this mode.")
-    
-    def return_to_main(self):
-        """Return to the main screen"""
-        self.return_timer.stop()
-        if self.parent:
-            self.parent.show_main_screen()
-
-class AdminScreen(QWidget):
-    """Admin screen for managing the system"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.init_ui()
-    
-    def init_ui(self):
-        """Setup the user interface"""
-        # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
-        
-        # Header bar
-        header_layout = QHBoxLayout()
-        
-        # Back button
-        back_button = QPushButton("Back to Main")
-        back_button.setFixedSize(150, 40)
-        back_button.setStyleSheet("""
-            QPushButton {
-                background-color: #607D8B;
-                color: white;
-                border-radius: 5px;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background-color: #455A64;
-            }
-            QPushButton:pressed {
-                background-color: #37474F;
-            }
-        """)
-        back_button.clicked.connect(self.return_to_main)
-        
-        # Title
-        title_label = QLabel("Admin Panel")
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #1A237E;")
-        
-        header_layout.addWidget(back_button)
-        header_layout.addStretch()
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-        header_layout.addSpacing(150) # Balance the back button
-        
-        # Admin functions
-        functions_layout = QVBoxLayout()
-        functions_layout.setSpacing(10)
-        
-        # Add new student/card button
-        add_button = QPushButton("Add New Student/Card")
-        add_button.setStyleSheet("""
+        self.open_button = QPushButton("Open Gate")
+        self.open_button.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
                 color: white;
                 border-radius: 5px;
+                padding: 10px;
                 font-size: 16px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #388E3C;
-            }
-            QPushButton:pressed {
-                background-color: #2E7D32;
-            }
-        """)
-        add_button.clicked.connect(self.add_new_entry)
-        
-        # View entry logs button
-        view_logs_button = QPushButton("View Entry Logs")
-        view_logs_button.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border-radius: 5px;
-                font-size: 16px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-            QPushButton:pressed {
-                background-color: #1565C0;
-            }
-        """)
-        view_logs_button.clicked.connect(self.view_entry_logs)
-        
-        # View statistics button
-        view_stats_button = QPushButton("View Statistics")
-        view_stats_button.setStyleSheet("""
-            QPushButton {
-                background-color: #FF9800;
-                color: white;
-                border-radius: 5px;
-                font-size: 16px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #F57C00;
-            }
-            QPushButton:pressed {
-                background-color: #E65100;
-            }
-        """)
-        view_stats_button.clicked.connect(self.view_statistics)
-
-        # Testing Interface
-        test_group = QFrame()
-        test_group.setFrameShape(QFrame.StyledPanel)
-        test_group.setStyleSheet("""
-            QFrame {
-                background-color: #F5F5F5;
-                border: 1px solid #BDBDBD;
-                border-radius: 5px;
-                padding: 10px;
-            }
-        """)
-        test_layout = QVBoxLayout(test_group)
-        
-        test_title = QLabel("Testing Interface")
-        test_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
-        test_layout.addWidget(test_title)
-        
-        # Test card scanning buttons
-        scan_buttons_layout = QHBoxLayout()
-        
-        # Valid student card
-        valid_student_btn = QPushButton("Test Valid Student")
-        valid_student_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
             }
             QPushButton:hover {
                 background-color: #388E3C;
             }
         """)
-        valid_student_btn.clicked.connect(lambda: self.test_card_scan("A1B2C3D4"))
+        self.open_button.clicked.connect(self.open_gate)
         
-        # Admin card
-        admin_card_btn = QPushButton("Test Admin Card")
-        admin_card_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
-        admin_card_btn.clicked.connect(lambda: self.test_card_scan("ADMIN001"))
-        
-        # Invalid card
-        invalid_card_btn = QPushButton("Test Invalid Card")
-        invalid_card_btn.setStyleSheet("""
+        self.close_button = QPushButton("Close Gate")
+        self.close_button.setStyleSheet("""
             QPushButton {
                 background-color: #F44336;
                 color: white;
                 border-radius: 5px;
-                padding: 8px;
+                padding: 10px;
+                font-size: 16px;
             }
             QPushButton:hover {
                 background-color: #D32F2F;
             }
         """)
-        invalid_card_btn.clicked.connect(lambda: self.test_card_scan("INVALID_CARD"))
+        self.close_button.clicked.connect(self.close_gate)
         
-        scan_buttons_layout.addWidget(valid_student_btn)
-        scan_buttons_layout.addWidget(admin_card_btn)
-        scan_buttons_layout.addWidget(invalid_card_btn)
+        gate_buttons.addWidget(self.open_button)
+        gate_buttons.addWidget(self.close_button)
+        control_layout.addLayout(gate_buttons)
         
-        test_layout.addLayout(scan_buttons_layout)
+        # Test buttons
+        test_buttons = QHBoxLayout()
         
-        # Test visitor access
-        visitor_btn = QPushButton("Test Visitor Access")
-        visitor_btn.setStyleSheet("""
+        self.test_valid_btn = QPushButton("Test Valid Card")
+        self.test_valid_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.test_valid_btn.clicked.connect(lambda: self.test_card("A1B2C3D4"))
+        
+        self.test_admin_btn = QPushButton("Test Admin Card")
+        self.test_admin_btn.setStyleSheet("""
             QPushButton {
                 background-color: #9C27B0;
                 color: white;
@@ -1994,67 +1491,10 @@ class AdminScreen(QWidget):
                 background-color: #7B1FA2;
             }
         """)
-        visitor_btn.clicked.connect(self.test_visitor_access)
-        test_layout.addWidget(visitor_btn)
-
-        # Gate Control Testing
-        gate_group = QFrame()
-        gate_group.setFrameShape(QFrame.StyledPanel)
-        gate_group.setStyleSheet("""
-            QFrame {
-                background-color: #E3F2FD;
-                border: 1px solid #90CAF9;
-                border-radius: 5px;
-                padding: 10px;
-                margin-top: 10px;
-            }
-        """)
-        gate_layout = QVBoxLayout(gate_group)
+        self.test_admin_btn.clicked.connect(lambda: self.test_card("ADMIN001"))
         
-        gate_title = QLabel("Gate Control Testing")
-        gate_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1565C0;")
-        gate_layout.addWidget(gate_title)
-        
-        gate_buttons_layout = QHBoxLayout()
-        
-        # Open gate button
-        open_gate_btn = QPushButton("Open Gate")
-        open_gate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #388E3C;
-            }
-        """)
-        open_gate_btn.clicked.connect(self.test_open_gate)
-        
-        # Close gate button
-        close_gate_btn = QPushButton("Close Gate")
-        close_gate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #F44336;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #D32F2F;
-            }
-        """)
-        close_gate_btn.clicked.connect(self.test_close_gate)
-        
-        gate_buttons_layout.addWidget(open_gate_btn)
-        gate_buttons_layout.addWidget(close_gate_btn)
-        
-        gate_layout.addLayout(gate_buttons_layout)
-        
-        # Alarm testing
-        alarm_btn = QPushButton("Test Alarm System")
-        alarm_btn.setStyleSheet("""
+        self.test_invalid_btn = QPushButton("Test Invalid Card")
+        self.test_invalid_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FF9800;
                 color: white;
@@ -2065,284 +1505,159 @@ class AdminScreen(QWidget):
                 background-color: #F57C00;
             }
         """)
-        alarm_btn.clicked.connect(self.test_alarm)
+        self.test_invalid_btn.clicked.connect(lambda: self.test_card("INVALID"))
         
-        # Stop alarm button
-        stop_alarm_btn = QPushButton("Stop Alarm")
-        stop_alarm_btn.setStyleSheet("""
+        test_buttons.addWidget(self.test_valid_btn)
+        test_buttons.addWidget(self.test_admin_btn)
+        test_buttons.addWidget(self.test_invalid_btn)
+        control_layout.addLayout(test_buttons)
+        
+        # Admin functions
+        admin_buttons = QHBoxLayout()
+        
+        self.add_student_btn = QPushButton("Add Student")
+        self.add_student_btn.setStyleSheet("""
             QPushButton {
-                background-color: #9E9E9E;
+                background-color: #009688;
                 color: white;
                 border-radius: 5px;
                 padding: 8px;
             }
             QPushButton:hover {
-                background-color: #757575;
+                background-color: #00796B;
             }
         """)
-        stop_alarm_btn.clicked.connect(self.stop_alarm)
+        self.add_student_btn.clicked.connect(self.add_student)
         
-        alarm_buttons_layout = QHBoxLayout()
-        alarm_buttons_layout.addWidget(alarm_btn)
-        alarm_buttons_layout.addWidget(stop_alarm_btn)
+        self.view_logs_btn = QPushButton("View Logs")
+        self.view_logs_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #607D8B;
+                color: white;
+                border-radius: 5px;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #455A64;
+            }
+        """)
+        self.view_logs_btn.clicked.connect(self.view_logs)
         
-        gate_layout.addLayout(alarm_buttons_layout)
+        admin_buttons.addWidget(self.add_student_btn)
+        admin_buttons.addWidget(self.view_logs_btn)
+        control_layout.addLayout(admin_buttons)
         
-        test_layout.addWidget(gate_group)
+        main_layout.addWidget(control_group)
         
-        functions_layout.addWidget(add_button)
-        functions_layout.addWidget(view_logs_button)
-        functions_layout.addWidget(view_stats_button)
-        functions_layout.addWidget(test_group)
+        # Log Section
+        log_group = QFrame()
+        log_group.setFrameStyle(QFrame.StyledPanel)
+        log_layout = QVBoxLayout(log_group)
         
-        # Add elements to main layout
-        main_layout.addLayout(header_layout)
-        main_layout.addSpacing(20)
-        main_layout.addLayout(functions_layout)
-        main_layout.addStretch()
+        # Log header
+        log_header = QLabel("Recent Activity")
+        log_header.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
+        log_layout.addWidget(log_header)
         
-        self.setLayout(main_layout)
+        # Log display
+        self.log_display = QLabel()
+        self.log_display.setStyleSheet("""
+            QLabel {
+                background-color: #F5F5F5;
+                border: 1px solid #BDBDBD;
+                border-radius: 5px;
+                padding: 10px;
+                font-family: monospace;
+            }
+        """)
+        self.log_display.setWordWrap(True)
+        log_layout.addWidget(self.log_display)
+        
+        main_layout.addWidget(log_group)
+        
+        # Initialize hardware controller
+        self.hardware_controller = hardware_controller
+        self.update_log("System initialized")
     
-    def test_card_scan(self, card_id):
-        """Test card scanning with a specific card ID"""
-        if self.parent:
+    def update_time(self):
+        """Update the time display"""
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.time_label.setText(f"Current Time: {current_time}")
+    
+    def update_log(self, message):
+        """Update the log display"""
+        current_time = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log_display.setText(f"[{current_time}] {message}\n" + self.log_display.text())
+    
+    def open_gate(self):
+        """Open the gate"""
+        try:
+            self.hardware_controller.open_gate()
+            self.gate_status.setText("Gate: Open")
+            self.gate_status.setStyleSheet("font-size: 16px; color: #4CAF50;")
+            self.update_log("Gate opened")
+        except Exception as e:
+            self.update_log(f"Error opening gate: {e}")
+    
+    def close_gate(self):
+        """Close the gate"""
+        try:
+            self.hardware_controller.close_gate()
+            self.gate_status.setText("Gate: Closed")
+            self.gate_status.setStyleSheet("font-size: 16px; color: #D32F2F;")
+            self.update_log("Gate closed")
+        except Exception as e:
+            self.update_log(f"Error closing gate: {e}")
+    
+    def test_card(self, card_id):
+        """Test card scanning"""
+        try:
             student_data = get_student_by_card(card_id)
-            if student_data:
-                self.parent.show_student_info_screen(student_data)
+            if student_data and student_data.get("valid", False):
+                self.last_scan.setText(f"Last Scan: {student_data.get('name', 'Unknown')}")
+                self.update_log(f"Valid card scanned: {student_data.get('name', 'Unknown')}")
+                self.open_gate()
             else:
-                # Handle invalid card
-                print(f"Invalid card: {card_id}")
-                log_entry(card_id, "UNKNOWN", "failure")
-                # Show denied status
-                self.parent.show_student_info_screen({"valid": False, "card_id": card_id})
+                self.last_scan.setText("Last Scan: Invalid Card")
+                self.update_log("Invalid card scanned")
+                self.hardware_controller.trigger_alarm()
+        except Exception as e:
+            self.update_log(f"Error testing card: {e}")
     
-    def test_visitor_access(self):
-        """Test visitor access functionality"""
-        if self.parent:
-            # Use admin card for visitor access
-            student_data = get_student_by_card("ADMIN001")
-            if student_data:
-                self.parent.show_student_info_screen(student_data)
-                # Wait a bit and then grant visitor access
-                QTimer.singleShot(1000, lambda: self.parent.student_info_screen.grant_visitor_access())
-    
-    def test_open_gate(self):
-        """Test opening the gate"""
-        gate_controller.open_gate()
-        QMessageBox.information(self, "Gate Control", "Gate opened successfully")
-    
-    def test_close_gate(self):
-        """Test closing the gate"""
-        gate_controller.close_gate()
-        QMessageBox.information(self, "Gate Control", "Gate closed successfully")
-    
-    def test_alarm(self):
-        """Test the alarm system"""
-        gate_controller.trigger_alarm()
-        QMessageBox.information(self, "Alarm System", "Alarm triggered! Click 'Stop Alarm' to deactivate.")
-    
-    def stop_alarm(self):
-        """Stop the alarm system"""
-        gate_controller.stop_alarm()
-        QMessageBox.information(self, "Alarm System", "Alarm stopped")
-    
-    def add_new_entry(self):
-        """Show dialog to add new student and card"""
+    def add_student(self):
+        """Show dialog to add new student"""
         dialog = AddEntryDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             data = dialog.get_data()
-            
-            # Add student
-            student_added = add_new_student(
-                data["student_id"],
-                data["name"],
-                data["faculty"],
-                data["program"],
-                data["level"],
-                data["image_path"]
-            )
-            
-            # Add card
-            card_added = add_new_card(
-                data["card_id"],
-                data["student_id"],
-                data["card_type"]
-            )
-            
-            if student_added and card_added:
-                QMessageBox.information(self, "Success", "New student and card added successfully.")
-            else:
-                QMessageBox.warning(self, "Warning", "Failed to add new entry. Check if ID or Card ID already exists.")
+            try:
+                if add_new_student(
+                    data["student_id"],
+                    data["name"],
+                    data["faculty"],
+                    data["program"],
+                    data["level"],
+                    data["image_path"]
+                ) and add_new_card(
+                    data["card_id"],
+                    data["student_id"],
+                    data["card_type"]
+                ):
+                    self.update_log(f"Added new student: {data['name']}")
+                else:
+                    self.update_log("Failed to add student")
+            except Exception as e:
+                self.update_log(f"Error adding student: {e}")
     
-    def view_entry_logs(self):
-        """Show entry logs (could be a new screen or dialog)"""
-        # For simplicity, just print to console
-        print("\n--- Recent Entry Logs ---")
-        entries = get_recent_entries(20)
-        for entry in entries:
-            print("{} - Card: {} - Student: {} - Status: {}".format(
-                entry["timestamp"], entry["card_id"], entry["student_name"], entry["status"]
-            ))
-        print("------------------------\n")
-        QMessageBox.information(self, "Entry Logs", "Recent entry logs printed to console.")
-    
-    def view_statistics(self):
-        """Show entry statistics"""
-        stats = get_entry_stats()
-        message = f"""
-Entry Statistics:
-
-Total Entries: {stats["total"]}
-Today's Entries: {stats["today"]}
-Successful Entries: {stats["successful"]}
-Failed Entries: {stats["failed"]}
-Visitor Access: {stats["visitor"]}
-        """
-        QMessageBox.information(self, "Statistics", message)
-    
-    def return_to_main(self):
-        """Return to the main screen"""
-        if self.parent:
-            self.parent.show_main_screen()
-
-class AddEntryDialog(QDialog):
-    """Dialog for adding a new student and card"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add New Student/Card")
-        self.setMinimumWidth(400)
-        
-        self.init_ui()
-    
-    def init_ui(self):
-        """Setup the dialog UI"""
-        layout = QVBoxLayout()
-        
-        # Student fields
-        student_group = QFrame()
-        student_group.setFrameShape(QFrame.StyledPanel)
-        student_layout = QVBoxLayout(student_group)
-        student_layout.addWidget(QLabel("Student Information"))
-        
-        self.student_id_input = QLineEdit()
-        self.student_id_input.setPlaceholderText("Student ID")
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Name")
-        self.faculty_input = QLineEdit()
-        self.faculty_input.setPlaceholderText("Faculty")
-        self.program_input = QLineEdit()
-        self.program_input.setPlaceholderText("Program")
-        self.level_input = QLineEdit()
-        self.level_input.setPlaceholderText("Level")
-        self.image_path_input = QLineEdit()
-        self.image_path_input.setPlaceholderText("Image Path (optional)")
-        
-        student_layout.addWidget(self.student_id_input)
-        student_layout.addWidget(self.name_input)
-        student_layout.addWidget(self.faculty_input)
-        student_layout.addWidget(self.program_input)
-        student_layout.addWidget(self.level_input)
-        student_layout.addWidget(self.image_path_input)
-        
-        # Card fields
-        card_group = QFrame()
-        card_group.setFrameShape(QFrame.StyledPanel)
-        card_layout = QVBoxLayout(card_group)
-        card_layout.addWidget(QLabel("Card Information"))
-        
-        self.card_id_input = QLineEdit()
-        self.card_id_input.setPlaceholderText("Card ID")
-        
-        # Card type selection
-        self.card_type_layout = QHBoxLayout()
-        self.student_radio = QRadioButton("Student")
-        self.admin_radio = QRadioButton("Admin")
-        self.student_radio.setChecked(True)
-        self.card_type_layout.addWidget(QLabel("Card Type:"))
-        self.card_type_layout.addWidget(self.student_radio)
-        self.card_type_layout.addWidget(self.admin_radio)
-        self.card_type_layout.addStretch()
-        
-        card_layout.addWidget(self.card_id_input)
-        card_layout.addLayout(self.card_type_layout)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        self.ok_button = QPushButton("OK")
-        self.cancel_button = QPushButton("Cancel")
-        
-        self.ok_button.clicked.connect(self.accept)
-        self.cancel_button.clicked.connect(self.reject)
-        
-        button_layout.addStretch()
-        button_layout.addWidget(self.ok_button)
-        button_layout.addWidget(self.cancel_button)
-        
-        layout.addWidget(student_group)
-        layout.addWidget(card_group)
-        layout.addLayout(button_layout)
-        
-        self.setLayout(layout)
-    
-    def get_data(self):
-        """Get data from the dialog fields"""
-        card_type = "admin" if self.admin_radio.isChecked() else "student"
-        
-        return {
-            "student_id": self.student_id_input.text().strip(),
-            "name": self.name_input.text().strip(),
-            "faculty": self.faculty_input.text().strip(),
-            "program": self.program_input.text().strip(),
-            "level": self.level_input.text().strip(),
-            "image_path": self.image_path_input.text().strip(),
-            "card_id": self.card_id_input.text().strip(),
-            "card_type": card_type
-        }
-
-class MainWindow(QMainWindow):
-    """Main application window"""
-    
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Smart Entry Gate System")
-        self.setGeometry(100, 100, 800, 600)
-        
-        # Central widget and stacked layout
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        
-        self.stacked_widget = QStackedWidget()
-        
-        # Create screens
-        self.main_screen = MainScreen(self)
-        self.student_info_screen = StudentInfoScreen(self)
-        self.admin_screen = AdminScreen(self)
-        
-        # Add screens to stacked widget
-        self.stacked_widget.addWidget(self.main_screen)
-        self.stacked_widget.addWidget(self.student_info_screen)
-        self.stacked_widget.addWidget(self.admin_screen)
-        
-        # Set main layout
-        main_layout = QVBoxLayout(self.central_widget)
-        main_layout.addWidget(self.stacked_widget)
-        
-        # Show main screen initially
-        self.show_main_screen()
-    
-    def show_main_screen(self):
-        """Switch to the main screen"""
-        self.stacked_widget.setCurrentWidget(self.main_screen)
-    
-    def show_student_info_screen(self, student_data):
-        """Switch to the student info screen and update data"""
-        self.student_info_screen.update_student_info(student_data)
-        self.stacked_widget.setCurrentWidget(self.student_info_screen)
-    
-    def show_admin_screen(self):
-        """Switch to the admin screen"""
-        self.stacked_widget.setCurrentWidget(self.admin_screen)
+    def view_logs(self):
+        """Show recent entry logs"""
+        try:
+            entries = get_recent_entries(10)
+            log_text = "Recent Entry Logs:\n"
+            for entry in entries:
+                log_text += f"{entry['timestamp']} - {entry['student_name']} - {entry['status']}\n"
+            self.update_log(log_text)
+        except Exception as e:
+            self.update_log(f"Error viewing logs: {e}")
 
 # Main execution
 if __name__ == "__main__":
