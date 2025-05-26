@@ -32,10 +32,17 @@ import atexit
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename='smart_gate.log'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    filename="smart_gate.log",
+    filemode="a" # Append to log file
 )
-logger = logging.getLogger('SmartGate')
+logger = logging.getLogger("SmartGate")
+# Add handler to also print logs to console
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # Database configuration
 DB_PATH = os.path.join(os.path.dirname(__file__), "database", "smart_gate.db")
@@ -43,12 +50,18 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 # Pin configuration
 PIN_CONFIG = {
-    'RED_LED': 24,      # GPIO24 PIN18
-    'GREEN_LED': 23,    # GPIO23 PIN16
-    'RELAY': 17,        # GPIO17 PIN11
-    'RED_BUZZER': 25,   # GPIO25 PIN22
-    'GREEN_BUZZER': 26  # GPIO26 PIN37
+    "RED_LED": 24,      # GPIO24 PIN18
+    "GREEN_LED": 23,    # GPIO23 PIN16
+    "RELAY": 17,        # GPIO17 PIN11 - ASSUMED TO CONTROL SERVO POWER
+    "RED_BUZZER": 25,   # GPIO25 PIN22
+    "GREEN_BUZZER": 26  # GPIO26 PIN37
 }
+
+# --- Configuration for Relay Logic ---
+# Set to True if your relay activates when GPIO is LOW
+# Set to False if your relay activates when GPIO is HIGH
+RELAY_ACTIVE_LOW = False # <<< CHANGE THIS IF YOUR RELAY IS ACTIVE LOW
+# -------------------------------------
 
 class PowerManagement:
     """Manages system power consumption and performance optimization"""
@@ -63,7 +76,7 @@ class PowerManagement:
         
         # Start monitoring thread
         self.monitor_thread = threading.Thread(target=self._monitor_resources, daemon=True)
-        self.monitor_thread.start()
+        # self.monitor_thread.start() # Disabled for now to simplify debugging
     
     def _monitor_resources(self):
         """Monitor system resources and adjust power mode accordingly"""
@@ -89,7 +102,7 @@ class PowerManagement:
                 time.sleep(60)  # Check every minute
                 
             except Exception as e:
-                print(f"Error in power management: {e}")
+                logger.error(f"Error in power management: {e}")
                 time.sleep(60)
     
     def _optimize_system(self, cpu_percent, memory_percent):
@@ -103,21 +116,22 @@ class PowerManagement:
             self._optimize_database()
             
             # Log optimization
-            print(f"System optimized - CPU: {cpu_percent}%, Memory: {memory_percent}%")
+            logger.info(f"System optimized - CPU: {cpu_percent}%, Memory: {memory_percent}%")
             
         except Exception as e:
-            print(f"Error during system optimization: {e}")
+            logger.error(f"Error during system optimization: {e}")
     
     def _clear_memory_cache(self):
         """Clear system memory cache"""
         try:
-            os.system('sync')  # Flush filesystem buffers
-            os.system('echo 3 > /proc/sys/vm/drop_caches')  # Clear page cache, dentries and inodes
-        except:
-            pass
+            os.system("sync")  # Flush filesystem buffers
+            os.system("echo 3 > /proc/sys/vm/drop_caches")  # Clear page cache, dentries and inodes
+        except Exception as e:
+            logger.warning(f"Could not clear memory cache: {e}")
     
     def _optimize_database(self):
         """Optimize SQLite database"""
+        conn = None
         try:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -129,9 +143,11 @@ class PowerManagement:
             cursor.execute("ANALYZE")
             
             conn.commit()
-            conn.close()
-        except:
-            pass
+        except Exception as e:
+             logger.error(f"Error optimizing database: {e}")
+        finally:
+            if conn:
+                conn.close()
     
     def set_power_mode(self, mode):
         """Set system power mode"""
@@ -141,20 +157,20 @@ class PowerManagement:
     
     def _apply_power_mode(self):
         """Apply power mode settings"""
-        if self.power_mode == "power_save":
-            # Reduce CPU frequency
-            os.system('echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor')
-            
-            # Disable unnecessary services
-            self._disable_non_essential_services()
-            
-        elif self.power_mode == "normal":
-            # Restore normal settings
-            os.system('echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor')
-            
-            # Enable essential services
-            self._enable_essential_services()
-    
+        try:
+            if self.power_mode == "power_save":
+                # Reduce CPU frequency
+                os.system("echo powersave > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+                # Disable unnecessary services
+                self._disable_non_essential_services()
+            elif self.power_mode == "normal":
+                # Restore normal settings
+                os.system("echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+                # Enable essential services
+                self._enable_essential_services()
+        except Exception as e:
+            logger.warning(f"Could not apply power mode {self.power_mode}: {e}")
+
     def _disable_non_essential_services(self):
         """Disable non-essential services in power save mode"""
         # Add service management logic here
@@ -172,17 +188,29 @@ class HardwareController:
     """Controls all hardware components connected to Raspberry Pi"""
     
     def __init__(self):
+        self.servo = None
+        self.pn532 = None
+        self.servo_kit = None
+        self.i2c = None
+        self.red_led_pwm = None
+        self.green_led_pwm = None
+        self.red_buzzer_pwm = None
+        self.green_buzzer_pwm = None
+        self.gate_closed = True
+        self.relay_state_on = GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH
+        self.relay_state_off = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+        
         try:
             # GPIO Setup
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
             
             # Pin Definitions from config
-            self.RED_LED_PIN = PIN_CONFIG['RED_LED']
-            self.GREEN_LED_PIN = PIN_CONFIG['GREEN_LED']
-            self.RELAY_PIN = PIN_CONFIG['RELAY']
-            self.RED_BUZZER_PIN = PIN_CONFIG['RED_BUZZER']
-            self.GREEN_BUZZER_PIN = PIN_CONFIG['GREEN_BUZZER']
+            self.RED_LED_PIN = PIN_CONFIG["RED_LED"]
+            self.GREEN_LED_PIN = PIN_CONFIG["GREEN_LED"]
+            self.RELAY_PIN = PIN_CONFIG["RELAY"]
+            self.RED_BUZZER_PIN = PIN_CONFIG["RED_BUZZER"]
+            self.GREEN_BUZZER_PIN = PIN_CONFIG["GREEN_BUZZER"]
             
             # Servo Parameters for Three-Arm Gate
             self.SERVO_CHANNEL = 0     # Channel 0 for the servo
@@ -219,6 +247,8 @@ class HardwareController:
             try:
                 self.i2c = busio.I2C(board.SCL, board.SDA)
                 self.pn532 = PN532_I2C(self.i2c, debug=False)
+                # Configure PN532
+                self.pn532.SAM_configuration()
                 logger.info("NFC reader initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize NFC reader: {e}")
@@ -229,16 +259,23 @@ class HardwareController:
                 self.servo_kit = ServoKit(channels=16, frequency=self.SERVO_FREQ)
                 self.servo = self.servo_kit.servo[self.SERVO_CHANNEL]
                 self.servo.set_pulse_width_range(self.SERVO_MIN_PULSE, self.SERVO_MAX_PULSE)
+                # Set initial servo position
+                self.servo.angle = self.SERVO_CLOSED_ANGLE 
+                time.sleep(0.5) # Allow servo to reach position
+                self.servo.fraction = None # Disable servo pulse to save power and prevent jitter
                 logger.info("Servo controller initialized successfully")
+            except ValueError as e:
+                 logger.error(f"Failed to initialize servo controller (maybe PCA9685 not found?): {e}")
+                 self.servo = None
             except Exception as e:
                 logger.error(f"Failed to initialize servo controller: {e}")
                 self.servo = None
             
             # Set initial states
-            self.gate_closed = True
             self.led_off()
             self.buzzer_off()
-            self.relay_off()
+            self.relay_off() # Ensure relay is off initially
+            self.gate_closed = True
             
             # Start NFC scanning thread
             self.nfc_thread = threading.Thread(target=self._scan_nfc, daemon=True)
@@ -247,6 +284,8 @@ class HardwareController:
             
         except Exception as e:
             logger.error(f"Error initializing hardware controller: {e}")
+            # Attempt cleanup even if init fails
+            self.cleanup()
             raise
     
     def _scan_nfc(self):
@@ -254,7 +293,7 @@ class HardwareController:
         while True:
             try:
                 if not self.pn532:
-                    logger.warning("NFC reader not initialized")
+                    # logger.warning("NFC reader not initialized, skipping scan cycle.")
                     time.sleep(5)
                     continue
                 
@@ -263,17 +302,24 @@ class HardwareController:
                 
                 if uid is not None:
                     # Convert UID to string
-                    card_id = ''.join([hex(i)[2:].upper() for i in uid])
+                    card_id = "".join([format(i, "02X") for i in uid]) # Use format for proper hex
                     logger.info(f"Found card with UID: {card_id}")
                     
-                    # Process card scan
+                    # Process card scan (consider running in a separate thread if blocking)
                     self._process_card_scan(card_id)
                     
-                    # Wait a bit before next scan
-                    time.sleep(1)
+                    # Wait a bit before next scan to avoid rapid rescans
+                    time.sleep(2)
+                else:
+                    # No card found, short sleep
+                    time.sleep(0.1)
+                    
+            except RuntimeError as e:
+                logger.warning(f"NFC Scan Error (Runtime): {e}. Retrying...")
+                time.sleep(1)
             except Exception as e:
-                logger.error(f"Error scanning NFC: {e}")
-                time.sleep(5)  # Longer delay on error
+                logger.error(f"Unhandled error scanning NFC: {e}")
+                time.sleep(5)  # Longer delay on unexpected error
     
     def _process_card_scan(self, card_id):
         """Process NFC card scan"""
@@ -281,17 +327,26 @@ class HardwareController:
         student_data = get_student_by_card(card_id)
         
         if student_data and student_data.get("valid", False):
+            logger.info(f"Valid card scanned: {card_id}, Student: {student_data.get("name")}")
             # Valid card
             self.green_led_on()
             self.green_buzzer_on()
-            self.open_gate()
+            self.open_gate() # This handles the relay for servo power
             
             # Log successful entry
             log_entry(card_id, student_data.get("id", "UNKNOWN"), "success")
             
-            # Close gate after delay
-            threading.Timer(5, self.close_gate).start()
+            # Turn off success indicators and close gate after delay
+            def delayed_close():
+                time.sleep(5) # Gate open duration
+                self.green_led_off()
+                self.green_buzzer_off()
+                self.close_gate()
+            
+            threading.Thread(target=delayed_close, daemon=True).start()
+
         else:
+            logger.warning(f"Invalid or inactive card scanned: {card_id}")
             # Invalid card
             self.red_led_on()
             self.red_buzzer_on()
@@ -299,81 +354,122 @@ class HardwareController:
             # Log failed entry
             log_entry(card_id, "UNKNOWN", "failure")
             
-            # Trigger alarm
-            self.trigger_alarm()
+            # Trigger alarm and turn off indicators after delay
+            def delayed_alarm_off():
+                self.trigger_alarm() # Start alarm beeps
+                time.sleep(3) # Duration for red light/alarm sound
+                self.red_led_off()
+                # Alarm sound stops itself after beeps
+            
+            threading.Thread(target=delayed_alarm_off, daemon=True).start()
     
+    def _move_servo_smoothly(self, target_angle):
+        """Move servo smoothly to target angle"""
+        if not self.servo:
+            logger.error("Servo not initialized, cannot move.")
+            return
+            
+        try:
+            current_angle = self.servo.angle if self.servo.angle is not None else self.SERVO_CLOSED_ANGLE
+            # Clamp target angle to valid range (0-180 typical)
+            target_angle = max(0, min(180, target_angle))
+            
+            if abs(current_angle - target_angle) < 1: # Already at target
+                self.servo.angle = target_angle # Ensure it's set
+                return
+
+            steps = self.SERVO_STEPS
+            angle_diff = target_angle - current_angle
+            angle_step = angle_diff / steps
+            # Calculate delay based on angle difference to maintain speed
+            total_time = abs(angle_diff / 90.0) * self.SERVO_SPEED
+            delay = total_time / steps
+            delay = max(0.01, delay) # Ensure minimum delay
+
+            logger.info(f"Moving servo from {current_angle:.1f} to {target_angle:.1f} in {steps} steps, delay {delay:.3f}s")
+
+            for i in range(steps):
+                step_target_angle = current_angle + (angle_step * (i + 1))
+                self.servo.angle = step_target_angle
+                time.sleep(delay)
+            
+            # Ensure final position is set
+            self.servo.angle = target_angle
+            time.sleep(0.1) # Small pause at final position
+            logger.info(f"Servo reached target angle: {target_angle:.1f}")
+
+        except Exception as e:
+            logger.error(f"Error moving servo: {e}")
+        finally:
+             # Disable servo pulse after movement to save power/reduce jitter
+             # self.servo.fraction = None
+             pass # Keep servo active for holding torque if needed
+
     def open_gate(self):
         """Open the gate using servo with controlled speed and increased torque"""
         if self.gate_closed:
+            logger.info("Opening gate...")
             try:
-                # Activate relay with delay to ensure stable power
-                time.sleep(0.2)
+                # Activate relay (assumed for servo power)
                 self.relay_on()
-                time.sleep(0.2)  # Wait for relay to stabilize
+                time.sleep(0.3)  # Wait longer for relay/power to stabilize
                 
-                # Calculate steps for smooth movement with heavy load
-                current_angle = self.servo.angle if self.servo.angle is not None else self.SERVO_CLOSED_ANGLE
-                angle_step = (self.SERVO_OPEN_ANGLE - current_angle) / self.SERVO_STEPS
-                delay = self.SERVO_SPEED / self.SERVO_STEPS
-                
-                # Move servo smoothly with increased torque
-                for i in range(self.SERVO_STEPS):
-                    target_angle = current_angle + (angle_step * (i + 1))
-                    self.servo.angle = target_angle
-                    time.sleep(delay)
+                # Move servo
+                self._move_servo_smoothly(self.SERVO_OPEN_ANGLE)
                 
                 # Hold position briefly to ensure stability
-                time.sleep(0.5)
+                # time.sleep(0.5) # Delay handled in smooth move
                 
                 self.gate_closed = False
-                print("Gate opened")
+                logger.info("Gate opened successfully")
             except Exception as e:
-                print(f"Error opening gate: {e}")
+                logger.error(f"Error opening gate: {e}")
                 # Ensure relay is off in case of error
                 self.relay_off()
-    
+        else:
+            logger.warning("Gate already open, open command ignored.")
+
     def close_gate(self):
         """Close the gate using servo with controlled speed and increased torque"""
         if not self.gate_closed:
+            logger.info("Closing gate...")
             try:
-                # Calculate steps for smooth movement with heavy load
-                current_angle = self.servo.angle if self.servo.angle is not None else self.SERVO_OPEN_ANGLE
-                angle_step = (self.SERVO_CLOSED_ANGLE - current_angle) / self.SERVO_STEPS
-                delay = self.SERVO_SPEED / self.SERVO_STEPS
-                
-                # Move servo smoothly with increased torque
-                for i in range(self.SERVO_STEPS):
-                    target_angle = current_angle + (angle_step * (i + 1))
-                    self.servo.angle = target_angle
-                    time.sleep(delay)
+                # Move servo first (relay should still be on from open_gate)
+                self._move_servo_smoothly(self.SERVO_CLOSED_ANGLE)
                 
                 # Hold position briefly to ensure stability
-                time.sleep(0.5)
+                # time.sleep(0.5) # Delay handled in smooth move
                 
                 # Deactivate relay after servo movement
                 self.relay_off()
                 
                 self.gate_closed = True
-                print("Gate closed")
+                logger.info("Gate closed successfully")
             except Exception as e:
-                print(f"Error closing gate: {e}")
+                logger.error(f"Error closing gate: {e}")
                 # Ensure relay is off in case of error
                 self.relay_off()
-    
+        else:
+             logger.warning("Gate already closed, close command ignored.")
+
     def green_led_on(self):
         """Turn on green LED"""
+        logger.debug(f"Turning GREEN LED ON (Pin {self.GREEN_LED_PIN})")
         GPIO.output(self.GREEN_LED_PIN, GPIO.HIGH)
     
     def green_led_off(self):
         """Turn off green LED"""
+        logger.debug(f"Turning GREEN LED OFF (Pin {self.GREEN_LED_PIN})")
         GPIO.output(self.GREEN_LED_PIN, GPIO.LOW)
     
     def red_led_on(self):
         """Turn on red LED"""
+        logger.debug(f"Turning RED LED ON (Pin {self.RED_LED_PIN})")
         GPIO.output(self.RED_LED_PIN, GPIO.HIGH)
     
     def red_led_off(self):
         """Turn off red LED"""
+        logger.debug(f"Turning RED LED OFF (Pin {self.RED_LED_PIN})")
         GPIO.output(self.RED_LED_PIN, GPIO.LOW)
     
     def led_off(self):
@@ -383,18 +479,22 @@ class HardwareController:
     
     def green_buzzer_on(self):
         """Turn on green buzzer"""
+        logger.debug(f"Turning GREEN BUZZER ON (Pin {self.GREEN_BUZZER_PIN})")
         self.green_buzzer_pwm.ChangeDutyCycle(50)  # 50% duty cycle
     
     def green_buzzer_off(self):
         """Turn off green buzzer"""
+        logger.debug(f"Turning GREEN BUZZER OFF (Pin {self.GREEN_BUZZER_PIN})")
         self.green_buzzer_pwm.ChangeDutyCycle(0)
     
     def red_buzzer_on(self):
         """Turn on red buzzer"""
+        logger.debug(f"Turning RED BUZZER ON (Pin {self.RED_BUZZER_PIN})")
         self.red_buzzer_pwm.ChangeDutyCycle(50)  # 50% duty cycle
     
     def red_buzzer_off(self):
         """Turn off red buzzer"""
+        logger.debug(f"Turning RED BUZZER OFF (Pin {self.RED_BUZZER_PIN})")
         self.red_buzzer_pwm.ChangeDutyCycle(0)
     
     def buzzer_off(self):
@@ -403,22 +503,30 @@ class HardwareController:
         self.red_buzzer_off()
     
     def relay_on(self):
-        """Turn on relay"""
-        GPIO.output(self.RELAY_PIN, GPIO.HIGH)
+        """Turn on relay (GPIO 17) using configured logic"""
+        logger.info(f"Turning RELAY ON (Pin {self.RELAY_PIN}, State: {self.relay_state_on})")
+        GPIO.output(self.RELAY_PIN, self.relay_state_on)
+        time.sleep(0.1) # Hold signal briefly
     
     def relay_off(self):
-        """Turn off relay"""
-        GPIO.output(self.RELAY_PIN, GPIO.LOW)
-    
+        """Turn off relay (GPIO 17) using configured logic"""
+        logger.info(f"Turning RELAY OFF (Pin {self.RELAY_PIN}, State: {self.relay_state_off})")
+        GPIO.output(self.RELAY_PIN, self.relay_state_off)
+        time.sleep(0.1) # Hold signal briefly
+
     def trigger_alarm(self):
-        """Trigger alarm sequence"""
+        """Trigger alarm sequence (3 beeps)"""
+        logger.info("Triggering alarm sequence...")
         def alarm_sequence():
-            for _ in range(3):  # 3 beeps
+            for i in range(3):  # 3 beeps
+                logger.debug(f"Alarm beep {i+1}")
                 self.red_buzzer_on()
-                time.sleep(0.5)
+                time.sleep(0.3)
                 self.red_buzzer_off()
-                time.sleep(0.5)
+                time.sleep(0.3)
+            logger.info("Alarm sequence finished.")
         
+        # Run alarm in a separate thread to avoid blocking
         threading.Thread(target=alarm_sequence, daemon=True).start()
     
     def cleanup(self):
@@ -426,9 +534,10 @@ class HardwareController:
         try:
             logger.info("Starting hardware cleanup")
             
-            # Stop NFC scanning thread
-            if hasattr(self, 'nfc_thread'):
-                self.nfc_thread.join(timeout=1)
+            # Stop NFC scanning thread (add mechanism to signal thread stop if needed)
+            # if hasattr(self, 'nfc_thread') and self.nfc_thread.is_alive():
+            #     # Add stop event or similar mechanism here
+            #     self.nfc_thread.join(timeout=1)
             
             # Turn off all outputs
             self.led_off()
@@ -436,15 +545,14 @@ class HardwareController:
             self.relay_off()
             
             # Stop PWM
-            if hasattr(self, 'red_led_pwm'):
-                self.red_led_pwm.stop()
-            if hasattr(self, 'green_led_pwm'):
-                self.green_led_pwm.stop()
-            if hasattr(self, 'red_buzzer_pwm'):
-                self.red_buzzer_pwm.stop()
-            if hasattr(self, 'green_buzzer_pwm'):
-                self.green_buzzer_pwm.stop()
+            if self.red_led_pwm: self.red_led_pwm.stop()
+            if self.green_led_pwm: self.green_led_pwm.stop()
+            if self.red_buzzer_pwm: self.red_buzzer_pwm.stop()
+            if self.green_buzzer_pwm: self.green_buzzer_pwm.stop()
             
+            # Disable servo
+            if self.servo: self.servo.fraction = None 
+
             # Cleanup GPIO
             GPIO.cleanup()
             
@@ -453,7 +561,18 @@ class HardwareController:
             logger.error(f"Error during hardware cleanup: {e}")
 
 # Create global hardware controller instance
-hardware_controller = HardwareController()
+hardware_controller = None
+try:
+    hardware_controller = HardwareController()
+except Exception as e:
+    logger.critical(f"Failed to initialize HardwareController: {e}. Exiting.")
+    # Perform minimal cleanup if possible
+    try: GPIO.cleanup() 
+    except: pass
+    sys.exit(1) # Exit if hardware fails to initialize
+
+# Ensure cleanup happens on exit
+atexit.register(hardware_controller.cleanup)
 
 # Gate Control and Alarm System
 class GateController:
@@ -517,12 +636,12 @@ class DatabasePool:
     def _create_connection(self):
         """Create a new database connection with optimized settings"""
         try:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False) # Allow threads
             conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
             conn.execute("PRAGMA synchronous=NORMAL")  # Faster writes with reasonable safety
             conn.execute("PRAGMA cache_size=-2000")  # Use 2MB of cache
             conn.execute("PRAGMA temp_store=MEMORY")  # Store temp tables and indices in memory
-            conn.execute("PRAGMA mmap_size=30000000000")  # Use memory-mapped I/O
+            # conn.execute("PRAGMA mmap_size=30000000000")  # Use memory-mapped I/O (Use with caution)
             conn.execute("PRAGMA page_size=4096")  # Optimal page size
             return conn
         except Exception as e:
@@ -578,13 +697,36 @@ class DatabasePool:
 # Create global database pool
 db_pool = DatabasePool()
 
+# Ensure pool is closed on exit
+atexit.register(db_pool.close_all)
+
 def get_db_connection():
     """Get a database connection from the pool"""
     return db_pool.get_connection()
 
+# --- Flask App Setup ---
+app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Configure caching
+cache = Cache(app, config={
+    "CACHE_TYPE": "SimpleCache",  # Use in-memory cache
+    "CACHE_DEFAULT_TIMEOUT": 300 # Cache for 5 minutes
+})
+
+def invalidate_cache():
+    """Clear relevant cache entries"""
+    cache.delete_memoized(get_recent_entries)
+    cache.delete_memoized(get_all_students)
+    cache.delete_memoized(get_entry_stats)
+    logger.info("Cache invalidated")
+
+# --- Database Functions (Using Pool) ---
+
 def setup_database():
     """Initialize the SQLite database with required tables"""
     conn = get_db_connection()
+    if not conn: return
     try:
         cursor = conn.cursor()
         
@@ -676,17 +818,18 @@ def setup_database():
         conn.commit()
         
     except Exception as e:
-        print(f"Error setting up database: {e}")
-        conn.rollback()
+        logger.error(f"Error setting up database: {e}")
+        if conn: conn.rollback()
     finally:
         db_pool.return_connection(conn)
     
-    print("Database setup completed.")
+    logger.info("Database setup completed.")
 
-# Database helper functions with connection pooling
+@cache.memoize()
 def get_student_by_card(card_id):
-    """Get student information by card ID"""
+    """Get student information by card ID (cached)"""
     conn = get_db_connection()
+    if not conn: return None
     try:
         cursor = conn.cursor()
         
@@ -713,12 +856,16 @@ def get_student_by_card(card_id):
             }
             return student_data
         return None
+    except Exception as e:
+        logger.error(f"Error getting student by card {card_id}: {e}")
+        return None
     finally:
         db_pool.return_connection(conn)
 
 def log_entry(card_id, student_id, status, gate="Main Gate", entry_type="regular"):
     """Log an entry attempt"""
     conn = get_db_connection()
+    if not conn: return
     try:
         cursor = conn.cursor()
         
@@ -733,12 +880,16 @@ def log_entry(card_id, student_id, status, gate="Main Gate", entry_type="regular
         
         # Invalidate relevant caches
         invalidate_cache()
+    except Exception as e:
+        logger.error(f"Error logging entry: {e}")
+        if conn: conn.rollback()
     finally:
         db_pool.return_connection(conn)
 
 def add_new_card(card_id, student_id, card_type="student"):
     """Add a new card to the database"""
     conn = get_db_connection()
+    if not conn: return False
     try:
         cursor = conn.cursor()
         
@@ -753,112 +904,148 @@ def add_new_card(card_id, student_id, card_type="student"):
         invalidate_cache()
         return True
     except sqlite3.IntegrityError:
+        logger.warning(f"Card ID {card_id} or Student ID {student_id} already exists or foreign key constraint failed.")
+        return False
+    except Exception as e:
+        logger.error(f"Error adding new card: {e}")
+        if conn: conn.rollback()
         return False
     finally:
         db_pool.return_connection(conn)
 
 def add_new_student(student_id, name, faculty="", program="", level="", image_path=""):
-    """Add a new student to the database"""
+    """Add or update a student in the database"""
     conn = get_db_connection()
+    if not conn: return False
     try:
         cursor = conn.cursor()
         
-        cursor.execute("""
-        INSERT INTO students (id, name, faculty, program, level, image_path)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (student_id, name, faculty, program, level, image_path))
+        # Check if student exists
+        cursor.execute("SELECT id FROM students WHERE id = ?", (student_id,))
+        exists = cursor.fetchone()
         
+        if exists:
+            # Update existing student
+            cursor.execute("""
+            UPDATE students
+            SET name = ?, faculty = ?, program = ?, level = ?, image_path = ?
+            WHERE id = ?
+            """, (name, faculty, program, level, image_path, student_id))
+            logger.info(f"Updated student: {student_id}")
+        else:
+            # Insert new student
+            cursor.execute("""
+            INSERT INTO students (id, name, faculty, program, level, image_path)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (student_id, name, faculty, program, level, image_path))
+            logger.info(f"Added new student: {student_id}")
+            
         conn.commit()
         
         # Invalidate relevant caches
         invalidate_cache()
         return True
-    except sqlite3.IntegrityError:
-        # Update existing student
-        cursor.execute("""
-        UPDATE students
-        SET name = ?, faculty = ?, program = ?, level = ?, image_path = ?
-        WHERE id = ?
-        """, (name, faculty, program, level, image_path, student_id))
-        
-        conn.commit()
-        
-        # Invalidate relevant caches
-        invalidate_cache()
-        return True
+    except Exception as e:
+        logger.error(f"Error adding/updating student {student_id}: {e}")
+        if conn: conn.rollback()
+        return False
     finally:
         db_pool.return_connection(conn)
 
+@cache.memoize()
 def get_all_students():
-    """Get all students from the database"""
+    """Get all students from the database (cached)"""
     conn = get_db_connection()
+    if not conn: return []
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    cursor.execute("""
-    SELECT s.id, s.name, s.faculty, s.program, s.level, s.image_path, c.card_id
-    FROM students s
-    LEFT JOIN cards c ON s.id = c.student_id
-    ORDER BY s.name
-    """)
-    
-    result = cursor.fetchall()
-    return [dict(row) for row in result]
+    try:
+        cursor.execute("""
+        SELECT s.id, s.name, s.faculty, s.program, s.level, s.image_path, c.card_id
+        FROM students s
+        LEFT JOIN cards c ON s.id = c.student_id
+        ORDER BY s.name
+        """)
+        
+        result = cursor.fetchall()
+        return [dict(row) for row in result]
+    except Exception as e:
+        logger.error(f"Error getting all students: {e}")
+        return []
+    finally:
+        db_pool.return_connection(conn)
 
+@cache.memoize()
 def get_recent_entries(limit=10):
-    """Get recent entry logs"""
+    """Get recent entry logs (cached)"""
     conn = get_db_connection()
+    if not conn: return []
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    cursor.execute("""
-    SELECT e.id, e.card_id, e.student_id, s.name as student_name, e.timestamp, e.gate, e.status, e.entry_type
-    FROM entry_logs e
-    LEFT JOIN students s ON e.student_id = s.id
-    ORDER BY e.timestamp DESC
-    LIMIT ?
-    """, (limit,))
-    
-    result = cursor.fetchall()
-    return [dict(row) for row in result]
+    try:
+        cursor.execute("""
+        SELECT e.id, e.card_id, e.student_id, s.name as student_name, e.timestamp, e.gate, e.status, e.entry_type
+        FROM entry_logs e
+        LEFT JOIN students s ON e.student_id = s.id
+        ORDER BY e.timestamp DESC
+        LIMIT ?
+        """, (limit,))
+        
+        result = cursor.fetchall()
+        return [dict(row) for row in result]
+    except Exception as e:
+        logger.error(f"Error getting recent entries: {e}")
+        return []
+    finally:
+        db_pool.return_connection(conn)
 
+@cache.memoize()
 def get_entry_stats():
-    """Get entry statistics"""
+    """Get entry statistics (cached)"""
     conn = get_db_connection()
+    if not conn: return {"total": 0, "today": 0, "successful": 0, "failed": 0, "visitor": 0}
     cursor = conn.cursor()
     
-    # Get today's date
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    
-    # Get total entries
-    cursor.execute("SELECT COUNT(*) FROM entry_logs")
-    total_entries = cursor.fetchone()[0]
-    
-    # Get today's entries
-    cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE timestamp LIKE ?", (f"{today}%",))
-    today_entries = cursor.fetchone()[0]
-    
-    # Get successful entries
-    cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE status = \"success\"")
-    successful_entries = cursor.fetchone()[0]
-    
-    # Get failed entries
-    cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE status = \"failure\"")
-    failed_entries = cursor.fetchone()[0]
-    
-    # Get visitor entries
-    cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE entry_type = \"visitor_access\"")
-    visitor_entries = cursor.fetchone()[0]
-    
-    return {
-        "total": total_entries,
-        "today": today_entries,
-        "successful": successful_entries,
-        "failed": failed_entries,
-        "visitor": visitor_entries
-    }
+    try:
+        # Get today"s date
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        
+        # Get total entries
+        cursor.execute("SELECT COUNT(*) FROM entry_logs")
+        total_entries = cursor.fetchone()[0]
+        
+        # Get today"s entries
+        cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE timestamp LIKE ?", (f"{today}%",))
+        today_entries = cursor.fetchone()[0]
+        
+        # Get successful entries
+        cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE status = \"success\"")
+        successful_entries = cursor.fetchone()[0]
+        
+        # Get failed entries
+        cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE status = \"failure\"")
+        failed_entries = cursor.fetchone()[0]
+        
+        # Get visitor entries
+        cursor.execute("SELECT COUNT(*) FROM entry_logs WHERE entry_type = \"visitor_access\"")
+        visitor_entries = cursor.fetchone()[0]
+        
+        return {
+            "total": total_entries,
+            "today": today_entries,
+            "successful": successful_entries,
+            "failed": failed_entries,
+            "visitor": visitor_entries
+        }
+    except Exception as e:
+        logger.error(f"Error getting entry stats: {e}")
+        return {"total": 0, "today": 0, "successful": 0, "failed": 0, "visitor": 0}
+    finally:
+        db_pool.return_connection(conn)
 
-# Create placeholder images if they don't exist
+# Create placeholder images if they don"t exist
 def create_placeholder_images():
     """Create placeholder images for testing"""
     # University logo placeholder
@@ -872,7 +1059,7 @@ def create_placeholder_images():
             d.text((40, 80), "University\nLogo", fill=(255, 255, 255))
             img.save("assets/university_logo_placeholder.png")
         except ImportError:
-            print("PIL/Pillow not found. Cannot create placeholder images.")
+            logger.warning("PIL/Pillow not found. Cannot create placeholder images.")
     
     # Student placeholders
     for i in range(1, 4):
@@ -970,14 +1157,14 @@ def create_flask_templates():
                 <div class="col-md-6">
                     <div class="card">
                         <div class="card-header">
-                            <h5>Today's Statistics</h5>
+                            <h5>Today"s Statistics</h5>
                         </div>
                         <div class="card-body">
                             <div class="row">
                                 <div class="col-6 mb-3">
                                     <div class="stat-card bg-primary text-white">
                                         <h3 id="today-entries">0</h3>
-                                        <p>Today's Entries</p>
+                                        <p>Today"s Entries</p>
                                     </div>
                                 </div>
                                 <div class="col-6 mb-3">
@@ -1059,7 +1246,7 @@ def create_flask_templates():
                 <div class="col-md-3">
                     <div class="stat-card bg-primary text-white">
                         <h3 id="stats-today-entries">0</h3>
-                        <p>Today's Entries</p>
+                        <p>Today"s Entries</p>
                     </div>
                 </div>
                 <div class="col-md-3">
@@ -1246,47 +1433,35 @@ def create_flask_templates():
 });
 """)
     
-    print("Flask templates created successfully.")
+    logger.info("Flask templates created successfully.")
 
-# Flask app with optimizations
-app = Flask(__name__)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
-
-# Configure Flask-Caching
-cache = Cache(app, config={
-    'CACHE_TYPE': 'simple',
-    'CACHE_DEFAULT_TIMEOUT': 300
-})
-
+# --- Flask Routes ---
 @app.route("/")
-@cache.cached(timeout=300)  # Cache for 5 minutes
 def index():
     """Main page"""
     return render_template("index.html")
 
 @app.route("/api/recent_entries")
-@cache.cached(timeout=30)  # Cache for 30 seconds
 def api_recent_entries():
     """API endpoint for recent entries data"""
     entries = get_recent_entries(5)
     return jsonify({"status": "success", "data": entries})
 
 @app.route("/api/students")
-@cache.cached(timeout=300)  # Cache for 5 minutes
 def api_students():
     """API endpoint for students data"""
     students = get_all_students()
     return jsonify({"status": "success", "data": students})
 
 @app.route("/api/entries")
-@cache.cached(timeout=30)  # Cache for 30 seconds
 def api_entries():
     """API endpoint for entry logs data"""
     conn = get_db_connection()
+    if not conn: return jsonify({"status": "error", "message": "Database connection failed"}), 500
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
     try:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
         cursor.execute("""
         SELECT e.id, e.card_id, e.student_id, s.name as student_name, e.timestamp, e.gate, e.status, e.entry_type
         FROM entry_logs e
@@ -1297,265 +1472,829 @@ def api_entries():
         
         entries = [dict(row) for row in cursor.fetchall()]
         return jsonify({"status": "success", "data": entries})
+    except Exception as e:
+        logger.error(f"Error fetching entries: {e}")
+        return jsonify({"status": "error", "message": "Failed to fetch entries"}), 500
     finally:
         db_pool.return_connection(conn)
 
 @app.route("/api/stats")
-@cache.cached(timeout=30)  # Cache for 30 seconds
 def api_stats():
     """API endpoint for statistics data"""
     stats = get_entry_stats()
     return jsonify({"status": "success", "data": stats})
 
-# Add cache invalidation for data changes
-def invalidate_cache():
-    """Invalidate all cached data"""
-    cache.clear()
-
-# Modify database functions to invalidate cache
-def add_new_card(card_id, student_id, card_type="student"):
-    """Add a new card to the database"""
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-        INSERT INTO cards (card_id, student_id, is_active, card_type)
-        VALUES (?, ?, 1, ?)
-        """, (card_id, student_id, card_type))
-        
-        conn.commit()
-        
-        # Invalidate relevant caches
-        invalidate_cache()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        db_pool.return_connection(conn)
-
-def add_new_student(student_id, name, faculty="", program="", level="", image_path=""):
-    """Add a new student to the database"""
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-        INSERT INTO students (id, name, faculty, program, level, image_path)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (student_id, name, faculty, program, level, image_path))
-        
-        conn.commit()
-        
-        # Invalidate relevant caches
-        invalidate_cache()
-        return True
-    except sqlite3.IntegrityError:
-        # Update existing student
-        cursor.execute("""
-        UPDATE students
-        SET name = ?, faculty = ?, program = ?, level = ?, image_path = ?
-        WHERE id = ?
-        """, (name, faculty, program, level, image_path, student_id))
-        
-        conn.commit()
-        
-        # Invalidate relevant caches
-        invalidate_cache()
-        return True
-    finally:
-        db_pool.return_connection(conn)
-
-class MainWindow(QMainWindow):
-    """Main application window with simplified interface"""
+# --- PyQt5 GUI Classes ---
+class MainScreen(QWidget):
+    """Main screen for the smart gate"""
     
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Smart Gate Control")
-        self.setGeometry(100, 100, 400, 300)
-        
-        # Create central widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.init_ui()
+    
+    def init_ui(self):
+        """Setup the user interface"""
         # Main layout
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(10)
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
         
-        # Status Section
-        status_group = QFrame()
-        status_group.setFrameStyle(QFrame.StyledPanel)
-        status_layout = QVBoxLayout(status_group)
+        # Header with date and time
+        header_layout = QHBoxLayout()
         
-        # Gate status
-        self.gate_status = QLabel("Gate: Closed")
-        self.gate_status.setStyleSheet("font-size: 20px; font-weight: bold; color: #D32F2F;")
-        self.gate_status.setAlignment(Qt.AlignCenter)
-        status_layout.addWidget(self.gate_status)
-        
-        # Last card scan
-        self.last_scan = QLabel("Last Scan: None")
-        self.last_scan.setStyleSheet("font-size: 16px;")
-        self.last_scan.setAlignment(Qt.AlignCenter)
-        status_layout.addWidget(self.last_scan)
-        
-        main_layout.addWidget(status_group)
-        
-        # Control Section
-        control_group = QFrame()
-        control_group.setFrameStyle(QFrame.StyledPanel)
-        control_layout = QVBoxLayout(control_group)
-        
-        # Gate control buttons
-        gate_buttons = QHBoxLayout()
-        
-        self.open_button = QPushButton("Open Gate")
-        self.open_button.setStyleSheet("""
+        # Admin button
+        admin_button = QPushButton("Admin")
+        admin_button.setFixedSize(100, 40)
+        admin_button.setStyleSheet("""
             QPushButton {
-                background-color: #4CAF50;
+                background-color: #1A237E;
                 color: white;
                 border-radius: 5px;
-                padding: 15px;
-                font-size: 18px;
-                min-width: 150px;
+                font-size: 16px;
             }
             QPushButton:hover {
-                background-color: #388E3C;
+                background-color: #0D47A1;
+            }
+            QPushButton:pressed {
+                background-color: #0A2472;
             }
         """)
-        self.open_button.clicked.connect(self.open_gate)
+        admin_button.clicked.connect(self.show_admin_screen)
         
-        self.close_button = QPushButton("Close Gate")
-        self.close_button.setStyleSheet("""
+        # Date and time
+        self.datetime_label = QLabel()
+        self.datetime_label.setAlignment(Qt.AlignRight)
+        self.datetime_label.setStyleSheet("font-size: 16px; color: #1A237E;")
+        self.update_datetime()
+        
+        # Timer to update date and time
+        self.datetime_timer = QTimer(self)
+        self.datetime_timer.timeout.connect(self.update_datetime)
+        self.datetime_timer.start(1000)  # Update every second
+        
+        header_layout.addWidget(admin_button)
+        header_layout.addStretch()
+        header_layout.addWidget(self.datetime_label)
+        
+        # University logo
+        logo_layout = QVBoxLayout()
+        logo_layout.setAlignment(Qt.AlignCenter)
+        
+        logo_frame = QFrame()
+        logo_frame.setFrameShape(QFrame.Box)
+        logo_frame.setFrameShadow(QFrame.Raised)
+        logo_frame.setLineWidth(2)
+        logo_frame.setStyleSheet("border: 2px solid #1A237E;")
+        logo_frame.setFixedSize(200, 200)
+        
+        logo_inner_layout = QVBoxLayout(logo_frame)
+        logo_label = QLabel()
+        logo_label.setAlignment(Qt.AlignCenter)
+        
+        # Load logo image
+        logo_path = "assets/university_logo_placeholder.png"
+        pixmap = QPixmap(logo_path)
+        if pixmap.isNull():
+            # If image not found, use text instead
+            logo_label.setText("University Logo")
+            logo_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #1A237E;")
+        else:
+            pixmap = pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pixmap)
+        
+        logo_inner_layout.addWidget(logo_label)
+        logo_layout.addWidget(logo_frame)
+        
+        # Welcome message
+        welcome_label = QLabel("Welcome to Smart Entry Gate")
+        welcome_label.setAlignment(Qt.AlignCenter)
+        welcome_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #1A237E; margin: 20px 0;")
+        
+        # Instructions
+        instructions_frame = QFrame()
+        instructions_frame.setFrameShape(QFrame.Box)
+        instructions_frame.setFrameShadow(QFrame.Sunken)
+        instructions_frame.setLineWidth(1)
+        instructions_frame.setStyleSheet("border: 1px solid #BDBDBD; background-color: #E8EAF6; padding: 10px;")
+        
+        instructions_layout = QVBoxLayout(instructions_frame)
+        
+        instruction_title = QLabel("Instructions:")
+        instruction_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1A237E;")
+        
+        instruction_text = QLabel("Please scan your NFC card to enter")
+        instruction_text.setAlignment(Qt.AlignCenter)
+        instruction_text.setStyleSheet("font-size: 16px; color: #1A237E; margin: 10px 0;")
+        
+        instructions_layout.addWidget(instruction_title)
+        instructions_layout.addWidget(instruction_text)
+        
+        # Add elements to main layout
+        main_layout.addLayout(header_layout)
+        main_layout.addLayout(logo_layout)
+        main_layout.addWidget(welcome_label)
+        main_layout.addStretch()
+        main_layout.addWidget(instructions_frame)
+        
+        self.setLayout(main_layout)
+    
+    def update_datetime(self):
+        """Update date and time display"""
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y/%m/%d")
+        time_str = now.strftime("%H:%M:%S")
+        self.datetime_label.setText(f"{date_str} {time_str}")
+    
+    def show_admin_screen(self):
+        """Show the admin screen"""
+        if self.parent:
+            self.parent.show_admin_screen()
+
+class StudentInfoScreen(QWidget):
+    """Student information display screen"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.init_ui()
+        
+        # Timer for automatic return to main screen
+        self.return_timer = QTimer(self)
+        self.return_timer.timeout.connect(self.return_to_main)
+        self.return_timer.setSingleShot(True)
+        
+        # For visitor access mode
+        self.visitor_mode = False
+        self.current_student_data = None
+    
+    def init_ui(self):
+        """Setup the user interface"""
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
+        
+        # Header bar
+        header_layout = QHBoxLayout()
+        
+        # Back button
+        back_button = QPushButton("Back")
+        back_button.setFixedSize(100, 40)
+        back_button.setStyleSheet("""
             QPushButton {
-                background-color: #F44336;
+                background-color: #607D8B;
                 color: white;
                 border-radius: 5px;
-                padding: 15px;
-                font-size: 18px;
-                min-width: 150px;
+                font-size: 16px;
             }
             QPushButton:hover {
-                background-color: #D32F2F;
+                background-color: #455A64;
+            }
+            QPushButton:pressed {
+                background-color: #37474F;
             }
         """)
-        self.close_button.clicked.connect(self.close_gate)
+        back_button.clicked.connect(self.return_to_main)
         
-        gate_buttons.addWidget(self.open_button)
-        gate_buttons.addWidget(self.close_button)
-        control_layout.addLayout(gate_buttons)
+        # Date and time
+        self.datetime_label = QLabel()
+        self.datetime_label.setAlignment(Qt.AlignRight)
+        self.datetime_label.setStyleSheet("font-size: 16px; color: #1A237E;")
+        self.update_datetime()
         
-        # Test buttons
-        test_buttons = QHBoxLayout()
+        # Timer to update date and time
+        self.datetime_timer = QTimer(self)
+        self.datetime_timer.timeout.connect(self.update_datetime)
+        self.datetime_timer.start(1000)  # Update every second
         
-        self.test_valid_btn = QPushButton("Test Valid Login")
-        self.test_valid_btn.setStyleSheet("""
+        header_layout.addWidget(back_button)
+        header_layout.addStretch()
+        header_layout.addWidget(self.datetime_label)
+        
+        # Student information content
+        content_layout = QHBoxLayout()
+        
+        # Student image
+        self.student_image_frame = QFrame()
+        self.student_image_frame.setFrameShape(QFrame.Box)
+        self.student_image_frame.setFrameShadow(QFrame.Raised)
+        self.student_image_frame.setLineWidth(2)
+        self.student_image_frame.setStyleSheet("border: 2px solid #1A237E;")
+        self.student_image_frame.setFixedSize(200, 200)
+        
+        image_layout = QVBoxLayout(self.student_image_frame)
+        self.student_image_label = QLabel()
+        self.student_image_label.setAlignment(Qt.AlignCenter)
+        image_layout.addWidget(self.student_image_label)
+        
+        # Student information
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(10)
+        
+        # Create information fields
+        self.name_label = self.create_info_field("Name:")
+        self.id_label = self.create_info_field("ID:")
+        self.faculty_label = self.create_info_field("Faculty:")
+        self.program_label = self.create_info_field("Program:")
+        self.level_label = self.create_info_field("Level:")
+        
+        info_layout.addWidget(self.name_label)
+        info_layout.addWidget(self.id_label)
+        info_layout.addWidget(self.faculty_label)
+        info_layout.addWidget(self.program_label)
+        info_layout.addWidget(self.level_label)
+        info_layout.addStretch()
+        
+        content_layout.addWidget(self.student_image_frame)
+        content_layout.addSpacing(20)
+        content_layout.addLayout(info_layout)
+        
+        # Entry status
+        self.status_frame = QFrame()
+        self.status_frame.setFrameShape(QFrame.Panel)
+        self.status_frame.setFrameShadow(QFrame.Raised)
+        self.status_frame.setLineWidth(2)
+        self.status_frame.setFixedHeight(60)
+        
+        status_layout = QHBoxLayout(self.status_frame)
+        self.status_label = QLabel()
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("font-size: 20px; font-weight: bold;")
+        status_layout.addWidget(self.status_label)
+        
+        # Visitor access section (initially hidden)
+        self.visitor_frame = QFrame()
+        self.visitor_frame.setFrameShape(QFrame.Panel)
+        self.visitor_frame.setFrameShadow(QFrame.Raised)
+        self.visitor_frame.setLineWidth(2)
+        self.visitor_frame.setStyleSheet("background-color: #E1F5FE; border: 2px solid #0288D1;")
+        self.visitor_frame.setVisible(False)
+        
+        visitor_layout = QVBoxLayout(self.visitor_frame)
+        
+        visitor_title = QLabel("Visitor Access Mode")
+        visitor_title.setAlignment(Qt.AlignCenter)
+        visitor_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #01579B;")
+        
+        visitor_instruction = QLabel("Press the button below to grant access to a visitor")
+        visitor_instruction.setAlignment(Qt.AlignCenter)
+        visitor_instruction.setStyleSheet("font-size: 14px; color: #0277BD;")
+        
+        self.grant_access_button = QPushButton("Grant Visitor Access")
+        self.grant_access_button.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
                 color: white;
                 border-radius: 5px;
-                padding: 15px;
-                font-size: 18px;
-                min-width: 150px;
+                font-size: 16px;
+                padding: 10px;
             }
             QPushButton:hover {
                 background-color: #1976D2;
             }
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
         """)
-        self.test_valid_btn.clicked.connect(lambda: self.test_card("A1B2C3D4"))
+        self.grant_access_button.clicked.connect(self.grant_visitor_access)
         
-        self.test_invalid_btn = QPushButton("Test Invalid Login")
-        self.test_invalid_btn.setStyleSheet("""
+        visitor_layout.addWidget(visitor_title)
+        visitor_layout.addWidget(visitor_instruction)
+        visitor_layout.addWidget(self.grant_access_button)
+        
+        # Add elements to main layout
+        main_layout.addLayout(header_layout)
+        main_layout.addSpacing(10)
+        main_layout.addLayout(content_layout)
+        main_layout.addStretch()
+        main_layout.addWidget(self.status_frame)
+        main_layout.addWidget(self.visitor_frame)
+        
+        self.setLayout(main_layout)
+    
+    def create_info_field(self, label_text):
+        """Create an information field"""
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Box)
+        frame.setFrameShadow(QFrame.Sunken)
+        frame.setLineWidth(1)
+        frame.setStyleSheet("border: 1px solid #BDBDBD; background-color: white;")
+        
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(10, 5, 10, 5)
+        
+        label = QLabel(label_text)
+        label.setStyleSheet("font-size: 16px; font-weight: bold; border: none; background-color: transparent;")
+        
+        value = QLabel()
+        value.setStyleSheet("font-size: 16px; border: none; background-color: transparent;")
+        
+        layout.addWidget(label)
+        layout.addWidget(value)
+        layout.setStretch(0, 1)
+        layout.setStretch(1, 2)
+        
+        return frame
+    
+    def update_datetime(self):
+        """Update date and time display"""
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y/%m/%d")
+        time_str = now.strftime("%H:%M:%S")
+        self.datetime_label.setText(f"{date_str} {time_str}")
+    
+    def update_student_info(self, student_data):
+        """Update student information display"""
+        # Store current student data
+        self.current_student_data = student_data
+        
+        # Check if this is an admin card
+        is_admin_card = student_data.get("card_type") == "admin"
+        self.visitor_mode = is_admin_card
+        
+        # Update image
+        image_path = student_data.get("image_path", "assets/student_placeholder.png")
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull():
+            # If image not found, use text instead
+            self.student_image_label.setText("No Image")
+            self.student_image_label.setStyleSheet("font-size: 16px;")
+        else:
+            pixmap = pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.student_image_label.setPixmap(pixmap)
+        
+        # Update information
+        self.name_label.layout().itemAt(1).widget().setText(student_data.get("name", ""))
+        self.id_label.layout().itemAt(1).widget().setText(student_data.get("id", ""))
+        self.faculty_label.layout().itemAt(1).widget().setText(student_data.get("faculty", ""))
+        self.program_label.layout().itemAt(1).widget().setText(student_data.get("program", ""))
+        self.level_label.layout().itemAt(1).widget().setText(student_data.get("level", ""))
+        
+        # Update entry status
+        is_valid = student_data.get("valid", False)
+        
+        if is_valid:
+            if is_admin_card:
+                # Admin card - show visitor access mode
+                self.status_label.setText("Security Staff Identified")
+                self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+                self.status_frame.setStyleSheet("background-color: #2196F3; border: 2px solid #1565C0;")
+                self.visitor_frame.setVisible(True)
+                
+                # Log admin card scan
+                log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success", entry_type="admin_scan")
+                
+                # Don"t activate entry yet - wait for visitor access button
+                self.return_timer.start(30000)  # 30 seconds timeout for admin mode
+            else:
+                # Regular student card - grant access
+                self.status_label.setText("Access Granted")
+                self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+                self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #388E3C;")
+                self.visitor_frame.setVisible(False)
+                
+                # Log successful entry
+                log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "success")
+                
+                # Trigger gate opening sequence
+                logger.info("Triggering gate opening sequence for valid student")
+                hardware_controller.green_led_on()
+                hardware_controller.green_buzzer_on()
+                hardware_controller.open_gate()
+                
+                # Return to main screen after delay and close gate
+                def delayed_close():
+                    time.sleep(5) # Gate open duration
+                    hardware_controller.green_led_off()
+                    hardware_controller.green_buzzer_off()
+                    hardware_controller.close_gate()
+                    self.return_to_main() # Return after closing
+                
+                threading.Thread(target=delayed_close, daemon=True).start()
+                # self.return_timer.start(7000) # Start timer to return (adjust based on close time)
+
+        else:
+            # Invalid card
+            self.status_label.setText("Access Denied")
+            self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+            self.status_frame.setStyleSheet("background-color: #F44336; border: 2px solid #D32F2F;")
+            self.visitor_frame.setVisible(False)
+            
+            # Log failed entry
+            log_entry(student_data.get("card_id", "UNKNOWN"), student_data.get("id", "UNKNOWN"), "failure")
+            
+            # Trigger alarm sequence
+            logger.info("Triggering alarm sequence for invalid card")
+            hardware_controller.red_led_on()
+            hardware_controller.red_buzzer_on()
+            hardware_controller.trigger_alarm()
+            
+            # Return to main screen after delay
+            def delayed_return():
+                time.sleep(3) # Alarm duration
+                hardware_controller.red_led_off()
+                # Alarm sound stops itself
+                self.return_to_main()
+            
+            threading.Thread(target=delayed_return, daemon=True).start()
+            # self.return_timer.start(5000)  # 5 seconds
+    
+    def grant_visitor_access(self):
+        """Grant access for a visitor"""
+        if self.visitor_mode and self.current_student_data:
+            logger.info("Granting visitor access...")
+            
+            # Log visitor access
+            log_entry(
+                self.current_student_data.get("card_id", "ADMIN"), 
+                self.current_student_data.get("id", "ADMIN"), 
+                "success", 
+                entry_type="visitor_access"
+            )
+            
+            # Update status display
+            self.status_label.setText("Visitor Access Granted")
+            self.status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+            self.status_frame.setStyleSheet("background-color: #4CAF50; border: 2px solid #388E3C;")
+            self.visitor_frame.setVisible(False)
+            
+            # Trigger gate opening sequence for visitor
+            logger.info("Triggering gate opening sequence for visitor")
+            hardware_controller.green_led_on()
+            hardware_controller.green_buzzer_on()
+            hardware_controller.open_gate()
+            
+            # Return to main screen after delay and close gate
+            def delayed_close():
+                time.sleep(5) # Gate open duration
+                hardware_controller.green_led_off()
+                hardware_controller.green_buzzer_off()
+                hardware_controller.close_gate()
+                self.return_to_main() # Return after closing
+            
+            threading.Thread(target=delayed_close, daemon=True).start()
+            # self.return_timer.start(7000) # Start timer to return (adjust based on close time)
+        else:
+            logger.error("Error: Cannot grant visitor access in this mode.")
+    
+    def return_to_main(self):
+        """Return to the main screen"""
+        self.return_timer.stop()
+        if self.parent:
+            # Ensure GUI updates happen in the main thread
+            QTimer.singleShot(0, self.parent.show_main_screen)
+
+class AdminScreen(QWidget):
+    """Admin screen for managing the system"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.init_ui()
+    
+    def init_ui(self):
+        """Setup the user interface"""
+        # Main layout
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
+        
+        # Header bar
+        header_layout = QHBoxLayout()
+        
+        # Back button
+        back_button = QPushButton("Back to Main")
+        back_button.setFixedSize(150, 40)
+        back_button.setStyleSheet("""
             QPushButton {
-                background-color: #FF9800;
+                background-color: #607D8B;
                 color: white;
                 border-radius: 5px;
-                padding: 15px;
-                font-size: 18px;
-                min-width: 150px;
+                font-size: 16px;
             }
             QPushButton:hover {
-                background-color: #F57C00;
+                background-color: #455A64;
+            }
+            QPushButton:pressed {
+                background-color: #37474F;
             }
         """)
-        self.test_invalid_btn.clicked.connect(lambda: self.test_card("INVALID"))
+        back_button.clicked.connect(self.return_to_main)
         
-        test_buttons.addWidget(self.test_valid_btn)
-        test_buttons.addWidget(self.test_invalid_btn)
-        control_layout.addLayout(test_buttons)
+        # Title
+        title_label = QLabel("Admin Panel")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #1A237E;")
         
-        main_layout.addWidget(control_group)
+        header_layout.addWidget(back_button)
+        header_layout.addStretch()
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        header_layout.addSpacing(150) # Balance the back button
         
-        # Initialize hardware controller
-        self.hardware_controller = hardware_controller
+        # Admin functions layout
+        functions_layout = QVBoxLayout()
+        functions_layout.setSpacing(10)
+        
+        # --- Hardware Control Section ---
+        hw_control_group = QFrame()
+        hw_control_group.setFrameShape(QFrame.StyledPanel)
+        hw_layout = QVBoxLayout(hw_control_group)
+        hw_layout.addWidget(QLabel("Hardware Control"))
+        
+        hw_buttons_layout = QHBoxLayout()
+        
+        open_gate_button = QPushButton("Open Gate")
+        open_gate_button.clicked.connect(hardware_controller.open_gate)
+        
+        close_gate_button = QPushButton("Close Gate")
+        close_gate_button.clicked.connect(hardware_controller.close_gate)
+        
+        relay_on_button = QPushButton("Relay ON")
+        relay_on_button.clicked.connect(hardware_controller.relay_on)
+        
+        relay_off_button = QPushButton("Relay OFF")
+        relay_off_button.clicked.connect(hardware_controller.relay_off)
+        
+        hw_buttons_layout.addWidget(open_gate_button)
+        hw_buttons_layout.addWidget(close_gate_button)
+        hw_buttons_layout.addWidget(relay_on_button)
+        hw_buttons_layout.addWidget(relay_off_button)
+        
+        hw_layout.addLayout(hw_buttons_layout)
+        functions_layout.addWidget(hw_control_group)
+        # --------------------------------
+        
+        # --- Database Management Section ---
+        db_control_group = QFrame()
+        db_control_group.setFrameShape(QFrame.StyledPanel)
+        db_layout = QVBoxLayout(db_control_group)
+        db_layout.addWidget(QLabel("Database Management"))
+        
+        db_buttons_layout = QHBoxLayout()
+        
+        add_button = QPushButton("Add New Student/Card")
+        add_button.clicked.connect(self.add_new_entry)
+        
+        view_logs_button = QPushButton("View Entry Logs")
+        view_logs_button.clicked.connect(self.view_entry_logs)
+        
+        view_stats_button = QPushButton("View Statistics")
+        view_stats_button.clicked.connect(self.view_statistics)
+        
+        db_buttons_layout.addWidget(add_button)
+        db_buttons_layout.addWidget(view_logs_button)
+        db_buttons_layout.addWidget(view_stats_button)
+        
+        db_layout.addLayout(db_buttons_layout)
+        functions_layout.addWidget(db_control_group)
+        # ----------------------------------
+        
+        # Add elements to main layout
+        main_layout.addLayout(header_layout)
+        main_layout.addSpacing(20)
+        main_layout.addLayout(functions_layout)
+        main_layout.addStretch()
+        
+        self.setLayout(main_layout)
     
-    def open_gate(self):
-        """Open the gate"""
-        try:
-            self.hardware_controller.open_gate()
-            self.gate_status.setText("Gate: Open")
-            self.gate_status.setStyleSheet("font-size: 20px; font-weight: bold; color: #4CAF50;")
-            QApplication.processEvents()  # Force GUI update
-        except Exception as e:
-            print(f"Error opening gate: {e}")
-    
-    def close_gate(self):
-        """Close the gate"""
-        try:
-            self.hardware_controller.close_gate()
-            self.gate_status.setText("Gate: Closed")
-            self.gate_status.setStyleSheet("font-size: 20px; font-weight: bold; color: #D32F2F;")
-            QApplication.processEvents()  # Force GUI update
-        except Exception as e:
-            print(f"Error closing gate: {e}")
-    
-    def test_card(self, card_id):
-        """Test card scanning"""
-        try:
-            student_data = get_student_by_card(card_id)
-            if student_data and student_data.get("valid", False):
-                self.last_scan.setText(f"Last Scan: {student_data.get('name', 'Unknown')}")
-                self.open_gate()
+    def add_new_entry(self):
+        """Show dialog to add new student and card"""
+        dialog = AddEntryDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            data = dialog.get_data()
+            
+            # Validate input
+            if not data["student_id"] or not data["name"] or not data["card_id"]:
+                QMessageBox.warning(self, "Input Error", "Student ID, Name, and Card ID are required.")
+                return
+                
+            # Add student
+            student_added = add_new_student(
+                data["student_id"],
+                data["name"],
+                data["faculty"],
+                data["program"],
+                data["level"],
+                data["image_path"]
+            )
+            
+            # Add card
+            card_added = add_new_card(
+                data["card_id"],
+                data["student_id"],
+                data["card_type"]
+            )
+            
+            if student_added and card_added:
+                QMessageBox.information(self, "Success", "New student and card added successfully.")
             else:
-                self.last_scan.setText("Last Scan: Invalid Card")
-                self.hardware_controller.trigger_alarm()
-            QApplication.processEvents()  # Force GUI update
-        except Exception as e:
-            print(f"Error testing card: {e}")
+                QMessageBox.warning(self, "Warning", "Failed to add new entry. Check if ID or Card ID already exists, or if Student ID exists.")
+    
+    def view_entry_logs(self):
+        """Show entry logs (could be a new screen or dialog)"""
+        # For simplicity, just print to console
+        logger.info("\n--- Recent Entry Logs ---")
+        entries = get_recent_entries(20)
+        for entry in entries:
+            logger.info(f"{entry["timestamp"]} - Card: {entry["card_id"]} - Student: {entry["student_name"]} - Status: {entry["status"]}")
+        logger.info("------------------------\n")
+        QMessageBox.information(self, "Entry Logs", "Recent entry logs printed to console/log file.")
+    
+    def view_statistics(self):
+        """Show entry statistics"""
+        stats = get_entry_stats()
+        message = f"""
+Entry Statistics:
 
-# Main execution
+Total Entries: {stats["total"]}
+Today"s Entries: {stats["today"]}
+Successful Entries: {stats["successful"]}
+Failed Entries: {stats["failed"]}
+Visitor Access: {stats["visitor"]}
+        """
+        QMessageBox.information(self, "Statistics", message)
+    
+    def return_to_main(self):
+        """Return to the main screen"""
+        if self.parent:
+            self.parent.show_main_screen()
+
+class AddEntryDialog(QDialog):
+    """Dialog for adding a new student and card"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add New Student/Card")
+        self.setMinimumWidth(400)
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        """Setup the dialog UI"""
+        layout = QVBoxLayout()
+        
+        # Student fields
+        student_group = QFrame()
+        student_group.setFrameShape(QFrame.StyledPanel)
+        student_layout = QVBoxLayout(student_group)
+        student_layout.addWidget(QLabel("Student Information"))
+        
+        self.student_id_input = QLineEdit()
+        self.student_id_input.setPlaceholderText("Student ID (*)")
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Name (*)")
+        self.faculty_input = QLineEdit()
+        self.faculty_input.setPlaceholderText("Faculty")
+        self.program_input = QLineEdit()
+        self.program_input.setPlaceholderText("Program")
+        self.level_input = QLineEdit()
+        self.level_input.setPlaceholderText("Level")
+        self.image_path_input = QLineEdit()
+        self.image_path_input.setPlaceholderText("Image Path (e.g., assets/new_student.png)")
+        
+        student_layout.addWidget(self.student_id_input)
+        student_layout.addWidget(self.name_input)
+        student_layout.addWidget(self.faculty_input)
+        student_layout.addWidget(self.program_input)
+        student_layout.addWidget(self.level_input)
+        student_layout.addWidget(self.image_path_input)
+        
+        # Card fields
+        card_group = QFrame()
+        card_group.setFrameShape(QFrame.StyledPanel)
+        card_layout = QVBoxLayout(card_group)
+        card_layout.addWidget(QLabel("Card Information"))
+        
+        self.card_id_input = QLineEdit()
+        self.card_id_input.setPlaceholderText("Card ID (*)")
+        
+        # Card type selection
+        self.card_type_layout = QHBoxLayout()
+        self.student_radio = QRadioButton("Student")
+        self.admin_radio = QRadioButton("Admin")
+        self.student_radio.setChecked(True)
+        self.card_type_layout.addWidget(QLabel("Card Type:"))
+        self.card_type_layout.addWidget(self.student_radio)
+        self.card_type_layout.addWidget(self.admin_radio)
+        self.card_type_layout.addStretch()
+        
+        card_layout.addWidget(self.card_id_input)
+        card_layout.addLayout(self.card_type_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        self.ok_button = QPushButton("OK")
+        self.cancel_button = QPushButton("Cancel")
+        
+        self.ok_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addStretch()
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+        
+        layout.addWidget(student_group)
+        layout.addWidget(card_group)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def get_data(self):
+        """Get data from the dialog fields"""
+        card_type = "admin" if self.admin_radio.isChecked() else "student"
+        
+        return {
+            "student_id": self.student_id_input.text().strip(),
+            "name": self.name_input.text().strip(),
+            "faculty": self.faculty_input.text().strip(),
+            "program": self.program_input.text().strip(),
+            "level": self.level_input.text().strip(),
+            "image_path": self.image_path_input.text().strip(),
+            "card_id": self.card_id_input.text().strip(),
+            "card_type": card_type
+        }
+
+class MainWindow(QMainWindow):
+    """Main application window"""
+    
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Smart Entry Gate System")
+        self.setGeometry(100, 100, 800, 600)
+        
+        # Central widget and stacked layout
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        
+        self.stacked_widget = QStackedWidget()
+        
+        # Create screens
+        self.main_screen = MainScreen(self)
+        self.student_info_screen = StudentInfoScreen(self)
+        self.admin_screen = AdminScreen(self)
+        
+        # Add screens to stacked widget
+        self.stacked_widget.addWidget(self.main_screen)
+        self.stacked_widget.addWidget(self.student_info_screen)
+        self.stacked_widget.addWidget(self.admin_screen)
+        
+        # Set main layout
+        main_layout = QVBoxLayout(self.central_widget)
+        main_layout.addWidget(self.stacked_widget)
+        
+        # Show main screen initially
+        self.show_main_screen()
+        
+        # Connect NFC scan signal to GUI update slot
+        # This requires a signal mechanism if HardwareController runs in a thread
+        # For now, assuming direct calls might work if GUI is responsive enough
+        # or consider using Qt Signals/Slots for thread safety
+        
+    def show_main_screen(self):
+        """Switch to the main screen"""
+        self.stacked_widget.setCurrentWidget(self.main_screen)
+    
+    def show_student_info_screen(self, student_data):
+        """Switch to the student info screen and update data"""
+        # Ensure this is called from the main GUI thread
+        self.student_info_screen.update_student_info(student_data)
+        self.stacked_widget.setCurrentWidget(self.student_info_screen)
+    
+    def show_admin_screen(self):
+        """Switch to the admin screen"""
+        self.stacked_widget.setCurrentWidget(self.admin_screen)
+
+# --- Main Execution ---
 if __name__ == "__main__":
-    try:
-        logger.info("Starting Smart Gate System")
-        
-        # Setup database
-        setup_database()
-        
-        # Start PyQt5 GUI
-        app_gui = QApplication(sys.argv)
-        main_window = MainWindow()
-        main_window.show()
-        
-        # Set up cleanup on exit
-        def cleanup():
-            logger.info("Starting system cleanup")
-            try:
-                if 'hardware_controller' in globals():
-                    hardware_controller.cleanup()
-                if 'db_pool' in globals():
-                    db_pool.close_all()
-                logger.info("System cleanup completed")
-            except Exception as e:
-                logger.error(f"Error during system cleanup: {e}")
-        
-        # Register cleanup function
-        atexit.register(cleanup)
-        
-        # Run the application
-        sys.exit(app_gui.exec_())
-        
-    except Exception as e:
-        logger.error(f"Fatal error in main execution: {e}")
-        sys.exit(1)
-    finally:
-        cleanup()
+    logger.info("Starting Smart Gate System...")
+    
+    # Setup database and create placeholders
+    setup_database()
+    create_placeholder_images()
+    create_flask_templates()
+    
+    # Start Flask app in a separate thread
+    def run_flask():
+        try:
+            logger.info("Starting Flask web server...")
+            # Note: Use host="0.0.0.0" to make it accessible on the network
+            app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+        except Exception as e:
+            logger.error(f"Error running Flask app: {e}")
+            
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Start PyQt5 GUI
+    logger.info("Starting PyQt5 GUI...")
+    app_gui = QApplication(sys.argv)
+    main_window = MainWindow()
+    main_window.show()
+    
+    # Start main event loop
+    exit_code = app_gui.exec_()
+    logger.info(f"GUI exited with code: {exit_code}")
+    sys.exit(exit_code)
+
