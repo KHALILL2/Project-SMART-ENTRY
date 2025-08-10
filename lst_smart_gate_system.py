@@ -1,64 +1,22 @@
-"""
-Gate Control System for Raspberry Pi (Direct GPIO Control)
-=========================================================
-
-System Architecture:
-------------------
-Raspberry Pi:
-- Handles GUI interface
-- Manages security and access control
-- Reads NFC cards via PN532
-- Controls all hardware directly via GPIO
-
-Hardware Connections:
--------------------
-Raspberry Pi GPIO Connections:
-NFC Reader (PN532):
-* SDA -> GPIO2 (Pin 3)    # Data connection
-* SCL -> GPIO3 (Pin 5)    # Clock signal
-* VCC -> 3.3V (Pin 1)     # Power supply
-* GND -> GND (Pin 6)      # Ground connection
-
-Hardware Components:
-* Servo Motor -> GPIO18 (Pin 12)      # Controls gate movement (PWM)
-* Gate Sensor -> GPIO24 (Pin 18)      # Detects gate position
-* LED Green -> GPIO23 (Pin 16)        # Access granted indicator
-* LED Red -> GPIO25 (Pin 22)          # Access denied indicator
-* Buzzer -> GPIO22 (Pin 15)           # Audio feedback
-* IR Sensor -> GPIO27 (Pin 13)        # Detects unauthorized access
-* Solenoid Lock -> GPIO17 (Pin 11)    # Locks gate mechanism
-
-Security Features:
-----------------
-1. NFC Card Authentication
-2. IR Sensor Detection
-   - Detects unauthorized access attempts
-   - Triggers alarm if someone passes without card
-3. Solenoid Lock
-   - Automatically locks gate mechanism
-   - Only unlocks with valid card access
-4. Access Logging
-   - Records all access attempts
-   - Tracks unauthorized access events
-
-Quick Start Guide:
-----------------
-1. Connect all hardware components as shown above
-2. Run the program: python3 gate_control_modified.py
-3. Use the control panel to manage access
-4. Present NFC cards to grant access
-
-Need Help?
----------
-- Green light + short beep = Access granted
-- Red light + long beep = Access denied
-- Continuous alarm = Unauthorized access detected
-- Emergency stop button is always available
-- Check the status panel for current system state
-
-Commit By: [Modified for RPi Direct Control]
-Version: 7.0
-"""
+# ===================================================================================
+# Gate Control System for Raspberry Pi - MODIFIED FOR NEW WIRING
+# Version: 7.1
+#
+# --- CRITICAL SAFETY & USAGE NOTES ---
+# 1. LOGIC LEVEL SHIFTERS REQUIRED: Your wiring powers the PN532 and IR Sensor
+#    with 5V. The Raspberry Pi's GPIOs are 3.3V ONLY. You MUST use a
+#    bidirectional logic level shifter between the 5V sensor/RFID data pins
+#    and the Pi's GPIO pins to prevent permanent damage to your Pi.
+#
+# 2. NO GATE SENSOR: This code has been modified to work WITHOUT a physical
+#    gate position sensor. The system now assumes the gate's state (Open/Closed)
+#    based on timers. This is less reliable than using a real sensor.
+#
+# 3. ACTIVE-LOW RELAY: This code assumes your relay module is "active-low,"
+#    meaning a LOW signal on the IN pin turns the relay ON (unlocking the gate).
+#    If your lock works in reverse, swap GPIO.HIGH and GPIO.LOW in the
+#    lock_gate() and unlock_gate() methods.
+# ===================================================================================
 
 import time
 import threading
@@ -340,84 +298,74 @@ class ConfigurationManager:
             log_level=log_config['log_level']
         )
 
-# Hardware pin definitions for Raspberry Pi
+# ==============================================================================
+# === HARDWARE DEFINITIONS UPDATED TO MATCH YOUR NEW WIRING ====================
+# ==============================================================================
 HARDWARE_PINS = {
-    'SERVO_PIN': 18,      # GPIO18 (Pin 12) for servo motor control (PWM)
-    'SOLENOID_PIN': 17,   # GPIO17 (Pin 11) for solenoid lock
-    'GATE_SENSOR_PIN': 24, # GPIO24 (Pin 18) for gate sensor
-    'GREEN_LED_PIN': 23,  # GPIO23 (Pin 16) for green LED
-    'RED_LED_PIN': 25,    # GPIO25 (Pin 22) for red LED
-    'IR_SENSOR_PIN': 27,  # GPIO27 (Pin 13) for IR sensor
-    'BUZZER_PIN': 22,     # GPIO22 (Pin 15) for buzzer
+    'SERVO_PIN': 18,        # GPIO18 for servo motor control (Signal)
+    'RELAY_PIN': 17,        # GPIO17 for relay control (IN) -> Controls the 12V lock
+    'IR_SENSOR_PIN': 4,     # GPIO4 for IR sensor (OUT)
+    'GREEN_LED_BUZZER_PIN': 22, # GPIO22 for Green LED and Buzzer 1
+    'RED_LED_BUZZER_PIN': 27,   # GPIO27 for Red LED and Buzzer 2
 }
 
+# ==============================================================================
+# === HARDWARE CONTROLLER REWRITTEN FOR NEW WIRING AND NO GATE SENSOR ==========
+# ==============================================================================
 class RPiHardwareController:
     """
     Manages direct hardware control on Raspberry Pi.
-    Handles GPIO control for all hardware components.
+    Handles GPIO control for all hardware components. (REVISED FOR NEW WIRING)
     """
     
     def __init__(self, config: HardwareConfig) -> None:
         self.config = config
         self.running = True
         
-        # State variables
+        # State variables (now software-tracked due to no gate sensor)
         self.gate_state = GateState.CLOSED
         self.lock_state = LockState.LOCKED
         
-        # Hardware objects
         self.servo_pwm = None
-        
-        # Event queues for communication with main application
         self.event_queue: queue.Queue[str] = queue.Queue()
         
-        # Initialize GPIO
         self.initialize_gpio()
-        
-        # Start monitoring threads
-        self.start_monitoring_threads()
-        
         logging.info("RPi Hardware Controller initialized successfully")
 
     def initialize_gpio(self) -> None:
         """
-        Initialize GPIO pins and hardware components.
+        Initialize GPIO pins and hardware components. (REVISED)
         """
         try:
-            # Set GPIO mode
             GPIO.setmode(GPIO.BCM)
             
             # Setup output pins
             GPIO.setup(HARDWARE_PINS['SERVO_PIN'], GPIO.OUT)
-            GPIO.setup(HARDWARE_PINS['SOLENOID_PIN'], GPIO.OUT)
-            GPIO.setup(HARDWARE_PINS['GREEN_LED_PIN'], GPIO.OUT)
-            GPIO.setup(HARDWARE_PINS['RED_LED_PIN'], GPIO.OUT)
-            GPIO.setup(HARDWARE_PINS['BUZZER_PIN'], GPIO.OUT)
+            GPIO.setup(HARDWARE_PINS['RELAY_PIN'], GPIO.OUT)
+            GPIO.setup(HARDWARE_PINS['GREEN_LED_BUZZER_PIN'], GPIO.OUT)
+            GPIO.setup(HARDWARE_PINS['RED_LED_BUZZER_PIN'], GPIO.OUT)
             
-            # Setup input pins with pull-up resistors
-            GPIO.setup(HARDWARE_PINS['GATE_SENSOR_PIN'], GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            # Setup input pin for IR Sensor
             GPIO.setup(HARDWARE_PINS['IR_SENSOR_PIN'], GPIO.IN, pull_up_down=GPIO.PUD_UP)
             
             # Initialize servo PWM
             self.servo_pwm = GPIO.PWM(HARDWARE_PINS['SERVO_PIN'], self.config.servo_frequency)
-            self.servo_pwm.start(self.config.servo_close_duty)  # Start in closed position
+            self.servo_pwm.start(self.config.servo_close_duty)
             
             # Initialize outputs to safe states
-            GPIO.output(HARDWARE_PINS['SOLENOID_PIN'], GPIO.LOW)  # Lock engaged
-            GPIO.output(HARDWARE_PINS['GREEN_LED_PIN'], GPIO.LOW)
-            GPIO.output(HARDWARE_PINS['RED_LED_PIN'], GPIO.LOW)
-            GPIO.output(HARDWARE_PINS['BUZZER_PIN'], GPIO.LOW)
+            # IMPORTANT: Relay modules are often "active-low", meaning LOW turns them ON.
+            # We set the pin HIGH to ensure the relay is OFF (and the gate is LOCKED).
+            GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH) # Relay OFF = Locked
+            GPIO.output(HARDWARE_PINS['GREEN_LED_BUZZER_PIN'], GPIO.LOW)
+            GPIO.output(HARDWARE_PINS['RED_LED_BUZZER_PIN'], GPIO.LOW)
             
-            # Setup event detection for sensors
+            # Setup event detection for the IR sensor ONLY.
+            # This fixes the "Failed to add edge detection" error as we no longer
+            # try to use a non-existent gate sensor pin.
+            ir_pin = HARDWARE_PINS['IR_SENSOR_PIN']
+            logging.info(f"Adding event detection for IR_SENSOR on GPIO {ir_pin}")
             GPIO.add_event_detect(
-                HARDWARE_PINS['GATE_SENSOR_PIN'], 
-                GPIO.BOTH, 
-                callback=self._gate_sensor_callback,
-                bouncetime=self.config.sensor_debounce_time
-            )
-            
-            GPIO.add_event_detect(
-                HARDWARE_PINS['IR_SENSOR_PIN'], 
+                ir_pin, 
                 GPIO.FALLING, 
                 callback=self._ir_sensor_callback,
                 bouncetime=self.config.sensor_debounce_time
@@ -429,60 +377,11 @@ class RPiHardwareController:
             logging.error(f"Error initializing GPIO: {e}")
             raise
 
-    def start_monitoring_threads(self):
-        """
-        Start hardware monitoring threads.
-        """
-        # Start hardware status monitoring thread
-        monitor_thread = threading.Thread(target=self._monitor_hardware_status, name="Hardware Monitor")
-        monitor_thread.daemon = True
-        monitor_thread.start()
-        logging.info("Started hardware monitoring thread")
-
-    def _monitor_hardware_status(self):
-        """
-        Monitor hardware status and update state variables.
-        """
-        while self.running:
-            try:
-                # Read gate sensor
-                gate_sensor_state = GPIO.input(HARDWARE_PINS['GATE_SENSOR_PIN'])
-                
-                # Update gate state based on sensor
-                if gate_sensor_state == GPIO.LOW:  # Sensor triggered (gate closed)
-                    if self.gate_state != GateState.CLOSED:
-                        self.gate_state = GateState.CLOSED
-                        self.event_queue.put("GATE_CLOSED")
-                        logging.info("Gate closed detected")
-                else:  # Sensor not triggered (gate open)
-                    if self.gate_state == GateState.CLOSED:
-                        self.gate_state = GateState.OPEN
-                        self.event_queue.put("GATE_OPENED")
-                        logging.info("Gate opened detected")
-                
-                time.sleep(0.1)  # Check every 100ms
-                
-            except Exception as e:
-                logging.error(f"Error in hardware monitoring: {e}")
-                time.sleep(1)
-
-    def _gate_sensor_callback(self, channel):
-        """
-        Callback for gate sensor state changes.
-        """
-        try:
-            state = GPIO.input(channel)
-            if state == GPIO.LOW:
-                self.event_queue.put("GATE_SENSOR_TRIGGERED")
-            else:
-                self.event_queue.put("GATE_SENSOR_RELEASED")
-        except Exception as e:
-            logging.error(f"Error in gate sensor callback: {e}")
+    # The _monitor_hardware_status and _gate_sensor_callback methods are removed
+    # because the gate sensor hardware does not exist in the new wiring plan.
 
     def _ir_sensor_callback(self, channel):
-        """
-        Callback for IR sensor detection.
-        """
+        """Callback for IR sensor detection."""
         try:
             self.event_queue.put("UNAUTHORIZED_ACCESS_DETECTED")
             logging.warning("Unauthorized access detected by IR sensor")
@@ -490,26 +389,26 @@ class RPiHardwareController:
             logging.error(f"Error in IR sensor callback: {e}")
 
     def open_gate(self) -> bool:
-        """
-        Open the gate by controlling the servo motor.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Opens the gate. Assumes success after a delay."""
         try:
+            if self.gate_state == GateState.OPEN:
+                return True # Already open
+            
             logging.info("Opening gate...")
             self.gate_state = GateState.OPENING
             
+            # Unlock first
+            self.unlock_gate()
+            time.sleep(0.5) # Wait for relay to switch
+            
             # Move servo to open position
             self.servo_pwm.ChangeDutyCycle(self.config.servo_open_duty)
-            time.sleep(1)  # Allow time for servo to move
-            
-            # Stop PWM signal to prevent servo jitter
-            self.servo_pwm.ChangeDutyCycle(0)
+            time.sleep(1.5) # Allow time for servo to move fully
+            self.servo_pwm.ChangeDutyCycle(0) # Stop PWM signal to prevent jitter
             
             self.gate_state = GateState.OPEN
-            self.event_queue.put("GATE_OPENED")
-            logging.info("Gate opened successfully")
+            self.event_queue.put("GATE_OPENED") # Notify system state changed
+            logging.info("Gate is now assumed to be OPEN")
             return True
             
         except Exception as e:
@@ -518,26 +417,27 @@ class RPiHardwareController:
             return False
 
     def close_gate(self) -> bool:
-        """
-        Close the gate by controlling the servo motor.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Closes the gate. Assumes success and locks it."""
         try:
+            if self.gate_state == GateState.CLOSED:
+                return True # Already closed
+
             logging.info("Closing gate...")
             self.gate_state = GateState.CLOSING
             
             # Move servo to closed position
             self.servo_pwm.ChangeDutyCycle(self.config.servo_close_duty)
-            time.sleep(1)  # Allow time for servo to move
-            
-            # Stop PWM signal to prevent servo jitter
-            self.servo_pwm.ChangeDutyCycle(0)
-            
+            time.sleep(1.5) # Allow time for servo to move fully
+            self.servo_pwm.ChangeDutyCycle(0) # Stop PWM signal
+
             self.gate_state = GateState.CLOSED
-            self.event_queue.put("GATE_CLOSED")
-            logging.info("Gate closed successfully")
+            logging.info("Gate is now assumed to be CLOSED")
+            
+            # Lock the gate after closing
+            time.sleep(0.5)
+            self.lock_gate()
+            
+            self.event_queue.put("GATE_CLOSED") # Notify system state changed
             return True
             
         except Exception as e:
@@ -546,195 +446,107 @@ class RPiHardwareController:
             return False
 
     def lock_gate(self) -> bool:
-        """
-        Engage the solenoid lock.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Engage the lock by turning the relay OFF (assumes active-low relay)."""
         try:
-            GPIO.output(HARDWARE_PINS['SOLENOID_PIN'], GPIO.HIGH)
+            # For most relay modules, HIGH on the IN pin means OFF.
+            GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)
             self.lock_state = LockState.LOCKED
-            logging.info("Gate locked")
+            logging.info("Gate locked (Relay OFF)")
             return True
         except Exception as e:
             logging.error(f"Error locking gate: {e}")
             return False
 
     def unlock_gate(self) -> bool:
-        """
-        Disengage the solenoid lock.
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
+        """Disengage the lock by turning the relay ON (assumes active-low relay)."""
         try:
-            GPIO.output(HARDWARE_PINS['SOLENOID_PIN'], GPIO.LOW)
+            # For most relay modules, LOW on the IN pin means ON.
+            GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)
             self.lock_state = LockState.UNLOCKED
-            logging.info("Gate unlocked")
+            logging.info("Gate unlocked (Relay ON)")
             return True
         except Exception as e:
             logging.error(f"Error unlocking gate: {e}")
             return False
-
-    def set_green_led(self, state: bool) -> None:
-        """
-        Control the green LED.
-        
-        Args:
-            state: True to turn on, False to turn off
-        """
+            
+    def _flash_pin(self, pin_num: int, duration: float):
+        """Helper function to flash a pin for a given duration."""
         try:
-            GPIO.output(HARDWARE_PINS['GREEN_LED_PIN'], GPIO.HIGH if state else GPIO.LOW)
-        except Exception as e:
-            logging.error(f"Error controlling green LED: {e}")
-
-    def set_red_led(self, state: bool) -> None:
-        """
-        Control the red LED.
-        
-        Args:
-            state: True to turn on, False to turn off
-        """
-        try:
-            GPIO.output(HARDWARE_PINS['RED_LED_PIN'], GPIO.HIGH if state else GPIO.LOW)
-        except Exception as e:
-            logging.error(f"Error controlling red LED: {e}")
-
-    def beep(self, duration: float = 0.5, frequency: Optional[int] = None) -> None:
-        """
-        Generate a beep sound using the buzzer.
-        
-        Args:
-            duration: Duration of the beep in seconds
-            frequency: Frequency of the beep (not used with simple buzzer)
-        """
-        try:
-            GPIO.output(HARDWARE_PINS['BUZZER_PIN'], GPIO.HIGH)
+            GPIO.output(pin_num, GPIO.HIGH)
             time.sleep(duration)
-            GPIO.output(HARDWARE_PINS['BUZZER_PIN'], GPIO.LOW)
+            GPIO.output(pin_num, GPIO.LOW)
         except Exception as e:
-            logging.error(f"Error controlling buzzer: {e}")
+            logging.error(f"Error flashing pin {pin_num}: {e}")
 
     def access_granted_feedback(self) -> None:
-        """
-        Provide visual and audio feedback for access granted.
-        """
+        """Provide visual and audio feedback for access granted."""
         try:
-            # Turn on green LED
-            self.set_green_led(True)
-            
-            # Short beep
-            self.beep(0.2)
-            
-            # Keep LED on for a moment
-            time.sleep(1)
-            
-            # Turn off LED
-            self.set_green_led(False)
-            
+            # Short flash/beep for success
+            self._flash_pin(HARDWARE_PINS['GREEN_LED_BUZZER_PIN'], 0.2)
         except Exception as e:
             logging.error(f"Error in access granted feedback: {e}")
 
     def access_denied_feedback(self) -> None:
-        """
-        Provide visual and audio feedback for access denied.
-        """
+        """Provide visual and audio feedback for access denied."""
         try:
-            # Turn on red LED
-            self.set_red_led(True)
-            
-            # Long beep
-            self.beep(1.0)
-            
-            # Keep LED on for a moment
-            time.sleep(1)
-            
-            # Turn off LED
-            self.set_red_led(False)
-            
+            # Long flash/beep for denial
+            self._flash_pin(HARDWARE_PINS['RED_LED_BUZZER_PIN'], 1.0)
         except Exception as e:
             logging.error(f"Error in access denied feedback: {e}")
 
     def alarm_feedback(self, duration: float = 5.0) -> None:
-        """
-        Provide alarm feedback for unauthorized access.
-        
-        Args:
-            duration: Duration of the alarm in seconds
-        """
+        """Provide alarm feedback for unauthorized access."""
         try:
             end_time = time.time() + duration
-            
+            pin = HARDWARE_PINS['RED_LED_BUZZER_PIN']
             while time.time() < end_time and self.running:
-                # Flash red LED and beep
-                self.set_red_led(True)
-                self.beep(0.1)
+                GPIO.output(pin, GPIO.HIGH)
                 time.sleep(0.1)
-                
-                self.set_red_led(False)
+                GPIO.output(pin, GPIO.LOW)
                 time.sleep(0.1)
-            
-            # Ensure LED is off
-            self.set_red_led(False)
-            
+            GPIO.output(pin, GPIO.LOW) # Ensure it's off
         except Exception as e:
             logging.error(f"Error in alarm feedback: {e}")
 
     def get_status(self) -> Dict[str, Any]:
-        """
-        Get current hardware status.
-        
-        Returns:
-            Dict containing current hardware status
-        """
+        """Get current hardware status."""
         try:
             return {
-                'gate_state': self.gate_state.value,
+                'gate_state': self.gate_state.value, # Software-tracked state
                 'lock_state': self.lock_state.value,
-                'gate_sensor': GPIO.input(HARDWARE_PINS['GATE_SENSOR_PIN']),
                 'ir_sensor': GPIO.input(HARDWARE_PINS['IR_SENSOR_PIN']),
                 'connected': True,
                 'last_update': datetime.now().isoformat()
             }
         except Exception as e:
             logging.error(f"Error getting hardware status: {e}")
-            return {
-                'gate_state': 'ERROR',
-                'lock_state': 'UNKNOWN',
-                'connected': False,
-                'error': str(e)
-            }
+            return {'gate_state': 'ERROR', 'connected': False, 'error': str(e)}
 
     def cleanup(self) -> None:
-        """
-        Clean up GPIO resources.
-        """
+        """Clean up GPIO resources."""
         try:
             self.running = False
-            
             if self.servo_pwm:
                 self.servo_pwm.stop()
             
-            # Turn off all outputs
-            GPIO.output(HARDWARE_PINS['SOLENOID_PIN'], GPIO.LOW)
-            GPIO.output(HARDWARE_PINS['GREEN_LED_PIN'], GPIO.LOW)
-            GPIO.output(HARDWARE_PINS['RED_LED_PIN'], GPIO.LOW)
-            GPIO.output(HARDWARE_PINS['BUZZER_PIN'], GPIO.LOW)
+            GPIO.output(HARDWARE_PINS['GREEN_LED_BUZZER_PIN'], GPIO.LOW)
+            GPIO.output(HARDWARE_PINS['RED_LED_BUZZER_PIN'], GPIO.LOW)
+            GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH) # Turn relay off
+
+            if GPIO_AVAILABLE:
+                GPIO.remove_event_detect(HARDWARE_PINS['IR_SENSOR_PIN'])
             
-            # Remove event detection
-            GPIO.remove_event_detect(HARDWARE_PINS['GATE_SENSOR_PIN'])
-            GPIO.remove_event_detect(HARDWARE_PINS['IR_SENSOR_PIN'])
-            
-            # Cleanup GPIO
             GPIO.cleanup()
-            
             logging.info("GPIO cleanup completed")
-            
         except Exception as e:
             logging.error(f"Error during GPIO cleanup: {e}")
 
-# NFC Card Manager (unchanged from original)
+
+# ==============================================================================
+# === THE FOLLOWING CLASSES REMAIN LARGELY UNCHANGED ===========================
+# ==============================================================================
+
+# NFC Card Manager
 class NFCCardManager:
     """
     Manages NFC card reading and authentication.
@@ -917,7 +729,7 @@ class NFCCardManager:
             self.save_authorized_cards()
             logging.info(f"Removed authorized card: {card_uid}")
 
-# Access Log Manager (unchanged from original)
+# Access Log Manager
 class AccessLogManager:
     """
     Manages access logging and history.
@@ -1062,8 +874,7 @@ class GateControlSystem:
                 # Check for hardware events
                 self._process_hardware_events()
                 
-                # Handle auto-close timer
-                self._handle_auto_close()
+                # Auto-close logic is now handled by timers set on gate actions
                 
                 time.sleep(0.1)  # Small delay to prevent excessive CPU usage
                 
@@ -1107,16 +918,11 @@ class GateControlSystem:
             self.access_log.log_access(card_uid, card_name, True, "Valid card")
             
             # Provide feedback
-            feedback_thread = threading.Thread(
-                target=self.hardware_controller.access_granted_feedback,
-                name="Access Granted Feedback"
-            )
-            feedback_thread.daemon = True
-            feedback_thread.start()
+            threading.Thread(
+                target=self.hardware_controller.access_granted_feedback
+            ).start()
             
-            # Unlock and open gate
-            self.hardware_controller.unlock_gate()
-            time.sleep(0.5)  # Brief delay
+            # Open gate
             self.hardware_controller.open_gate()
             
             # Set auto-close timer
@@ -1142,12 +948,9 @@ class GateControlSystem:
             self.access_log.log_access(card_uid, card_name, False, reason)
             
             # Provide feedback
-            feedback_thread = threading.Thread(
-                target=self.hardware_controller.access_denied_feedback,
-                name="Access Denied Feedback"
-            )
-            feedback_thread.daemon = True
-            feedback_thread.start()
+            threading.Thread(
+                target=self.hardware_controller.access_denied_feedback
+            ).start()
             
         except Exception as e:
             logging.error(f"Error denying access: {e}")
@@ -1183,15 +986,12 @@ class GateControlSystem:
             self.access_log.log_event("UNAUTHORIZED_ACCESS", "IR sensor triggered")
             
             # Trigger alarm
-            alarm_thread = threading.Thread(
+            threading.Thread(
                 target=self.hardware_controller.alarm_feedback,
                 args=(5.0,),  # 5 second alarm
-                name="Unauthorized Access Alarm"
-            )
-            alarm_thread.daemon = True
-            alarm_thread.start()
+            ).start()
             
-            # Lock the gate if it's not already locked
+            # Ensure the gate is locked
             if self.hardware_controller.lock_state != LockState.LOCKED:
                 self.hardware_controller.lock_gate()
             
@@ -1199,17 +999,11 @@ class GateControlSystem:
             logging.error(f"Error handling unauthorized access: {e}")
 
     def _handle_gate_closed(self) -> None:
-        """
-        Handle gate closed event.
-        """
+        """Handle gate closed event."""
         try:
-            logging.info("Gate closed")
-            
-            # Lock the gate
-            time.sleep(0.5)  # Brief delay
-            self.hardware_controller.lock_gate()
-            
-            # Cancel auto-close timer
+            logging.info("Gate is now closed.")
+            # Lock is handled within the close_gate function in the controller
+            # Cancel any pending auto-close timer
             if self.auto_close_timer:
                 self.auto_close_timer.cancel()
                 self.auto_close_timer = None
@@ -1218,14 +1012,11 @@ class GateControlSystem:
             logging.error(f"Error handling gate closed: {e}")
 
     def _handle_gate_opened(self) -> None:
-        """
-        Handle gate opened event.
-        """
+        """Handle gate opened event."""
         try:
-            logging.info("Gate opened")
-            
-            # Set auto-close timer if not already set
-            if not self.auto_close_timer:
+            logging.info("Gate is now open.")
+            # Set the auto-close timer if not already running
+            if not (self.auto_close_timer and self.auto_close_timer.is_alive()):
                 self._set_auto_close_timer()
                 
         except Exception as e:
@@ -1233,141 +1024,97 @@ class GateControlSystem:
 
     def _set_auto_close_timer(self) -> None:
         """
-        Set the auto-close timer.
+        Set or reset the auto-close timer.
         """
         try:
             if self.auto_close_timer:
                 self.auto_close_timer.cancel()
             
+            delay = self.security_config.auto_close_delay
             self.auto_close_timer = threading.Timer(
-                self.security_config.auto_close_delay,
+                delay,
                 self._auto_close_gate
             )
             self.auto_close_timer.start()
             
-            logging.info(f"Auto-close timer set for {self.security_config.auto_close_delay} seconds")
+            logging.info(f"Auto-close timer set for {delay} seconds")
             
         except Exception as e:
             logging.error(f"Error setting auto-close timer: {e}")
 
     def _auto_close_gate(self) -> None:
         """
-        Automatically close the gate.
+        Automatically close the gate if it's currently open.
         """
         try:
-            logging.info("Auto-closing gate")
+            if self.hardware_controller.gate_state == GateState.OPEN:
+                logging.info("Auto-closing gate due to timer expiry.")
+                self.hardware_controller.close_gate()
             
-            # Close the gate
-            self.hardware_controller.close_gate()
-            
-            # Clear the timer
             self.auto_close_timer = None
             
         except Exception as e:
             logging.error(f"Error auto-closing gate: {e}")
 
-    def _handle_auto_close(self) -> None:
-        """
-        Handle auto-close logic.
-        """
-        # This is now handled by the timer, but we keep this method for future enhancements
-        pass
-
     def manual_open_gate(self) -> bool:
         """
-        Manually open the gate (for emergency or testing).
-        
-        Returns:
-            bool: True if successful, False otherwise
+        Manually open the gate.
         """
-        try:
-            logging.info("Manual gate open requested")
-            
-            # Log the event
-            self.access_log.log_event("MANUAL_OPEN", "Gate opened manually")
-            
-            # Unlock and open gate
-            self.hardware_controller.unlock_gate()
-            time.sleep(0.5)
-            result = self.hardware_controller.open_gate()
-            
-            if result:
-                self._set_auto_close_timer()
-            
-            return result
-            
-        except Exception as e:
-            logging.error(f"Error in manual gate open: {e}")
-            return False
+        logging.info("Manual gate open requested")
+        self.access_log.log_event("MANUAL_OPEN", "Gate opened manually via GUI")
+        result = self.hardware_controller.open_gate()
+        if result:
+            self._set_auto_close_timer()
+        return result
 
     def manual_close_gate(self) -> bool:
         """
         Manually close the gate.
-        
-        Returns:
-            bool: True if successful, False otherwise
         """
-        try:
-            logging.info("Manual gate close requested")
-            
-            # Log the event
-            self.access_log.log_event("MANUAL_CLOSE", "Gate closed manually")
-            
-            # Cancel auto-close timer
-            if self.auto_close_timer:
-                self.auto_close_timer.cancel()
-                self.auto_close_timer = None
-            
-            # Close gate
-            return self.hardware_controller.close_gate()
-            
-        except Exception as e:
-            logging.error(f"Error in manual gate close: {e}")
-            return False
+        logging.info("Manual gate close requested")
+        self.access_log.log_event("MANUAL_CLOSE", "Gate closed manually via GUI")
+        if self.auto_close_timer:
+            self.auto_close_timer.cancel()
+            self.auto_close_timer = None
+        return self.hardware_controller.close_gate()
 
     def emergency_stop(self) -> None:
         """
-        Emergency stop - immediately stop all operations.
+        Emergency stop - immediately stop all operations and lock the gate.
         """
-        try:
-            logging.warning("Emergency stop activated")
+        logging.warning("Emergency stop activated")
+        self.access_log.log_event("EMERGENCY_STOP", "Emergency stop activated")
+        
+        if self.auto_close_timer:
+            self.auto_close_timer.cancel()
+            self.auto_close_timer = None
+
+        # Stop servo movement immediately
+        if self.hardware_controller.servo_pwm:
+            self.hardware_controller.servo_pwm.ChangeDutyCycle(0)
             
-            # Log the event
-            self.access_log.log_event("EMERGENCY_STOP", "Emergency stop activated")
-            
-            # Cancel auto-close timer
-            if self.auto_close_timer:
-                self.auto_close_timer.cancel()
-                self.auto_close_timer = None
-            
-            # Lock the gate
-            self.hardware_controller.lock_gate()
-            
-            # Turn off all LEDs
-            self.hardware_controller.set_green_led(False)
-            self.hardware_controller.set_red_led(False)
-            
-        except Exception as e:
-            logging.error(f"Error in emergency stop: {e}")
+        self.hardware_controller.gate_state = GateState.STOPPED
+        
+        # Ensure gate is locked
+        self.hardware_controller.lock_gate()
 
     def get_system_status(self) -> Dict[str, Any]:
         """
         Get comprehensive system status.
-        
-        Returns:
-            Dict containing system status information
         """
         try:
             hardware_status = self.hardware_controller.get_status()
             
+            timer_active = self.auto_close_timer is not None and self.auto_close_timer.is_alive()
+
             return {
                 'system_running': self.running,
                 'security_level': self.security_level.value,
                 'hardware': hardware_status,
                 'nfc_reader_available': self.nfc_manager.pn532 is not None,
                 'authorized_cards_count': len(self.nfc_manager.authorized_cards),
-                'last_access_time': self.last_access_time.isoformat() if self.last_access_time else None,
-                'auto_close_timer_active': self.auto_close_timer is not None,
+                'last_access_time': self.last_access_time.isoformat() if self.last_access_time else "N/A",
+                'auto_close_timer_active': timer_active,
                 'timestamp': datetime.now().isoformat()
             }
             
@@ -1383,27 +1130,18 @@ class GateControlSystem:
         """
         Shutdown the gate control system.
         """
-        try:
-            logging.info("Shutting down gate control system")
-            
-            self.running = False
-            
-            # Cancel auto-close timer
-            if self.auto_close_timer:
-                self.auto_close_timer.cancel()
-            
-            # Emergency stop
-            self.emergency_stop()
-            
-            # Cleanup hardware
-            self.hardware_controller.cleanup()
-            
-            logging.info("Gate control system shutdown complete")
-            
-        except Exception as e:
-            logging.error(f"Error during shutdown: {e}")
+        if not self.running:
+            return
+        logging.info("Shutting down gate control system")
+        self.running = False
+        
+        if self.auto_close_timer:
+            self.auto_close_timer.cancel()
+        
+        self.hardware_controller.cleanup()
+        logging.info("Gate control system shutdown complete")
 
-# GUI Application (simplified version)
+# GUI Application
 class GateControlGUI:
     """
     Simple GUI for the gate control system.
@@ -1411,75 +1149,52 @@ class GateControlGUI:
     
     def __init__(self, gate_system: GateControlSystem) -> None:
         self.gate_system = gate_system
-        
-        # Create main window
         self.root = tk.Tk()
         self.root.title("Gate Control System")
         self.root.geometry("800x600")
-        
-        # Create GUI elements
         self.create_widgets()
-        
-        # Start status update timer
         self.update_status()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def create_widgets(self) -> None:
-        """
-        Create GUI widgets.
-        """
-        # Main frame
+        """Create GUI widgets."""
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Title
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
         title_label = ttk.Label(main_frame, text="Gate Control System", font=("Arial", 16, "bold"))
         title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
-        
-        # Status frame
+
         status_frame = ttk.LabelFrame(main_frame, text="System Status", padding="10")
-        status_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        status_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        main_frame.columnconfigure(0, weight=1)
+
+        self.status_text = tk.Text(status_frame, height=10, width=80, wrap=tk.WORD)
+        self.status_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        self.status_text = tk.Text(status_frame, height=10, width=70)
-        self.status_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        
-        status_scrollbar = ttk.Scrollbar(status_frame, orient="vertical", command=self.status_text.yview)
-        status_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.status_text.configure(yscrollcommand=status_scrollbar.set)
-        
-        # Control frame
         control_frame = ttk.LabelFrame(main_frame, text="Manual Controls", padding="10")
-        control_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        control_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         
-        # Control buttons
-        ttk.Button(control_frame, text="Open Gate", command=self.open_gate).grid(row=0, column=0, padx=(0, 10))
-        ttk.Button(control_frame, text="Close Gate", command=self.close_gate).grid(row=0, column=1, padx=(0, 10))
-        ttk.Button(control_frame, text="Emergency Stop", command=self.emergency_stop).grid(row=0, column=2, padx=(0, 10))
+        ttk.Button(control_frame, text="Open Gate", command=self.open_gate).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Close Gate", command=self.close_gate).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Emergency Stop", command=self.emergency_stop).pack(side=tk.LEFT, padx=5)
         
-        # Access log frame
         log_frame = ttk.LabelFrame(main_frame, text="Recent Access Log", padding="10")
-        log_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        self.log_text = tk.Text(log_frame, height=8, width=70)
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        
-        log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
-        log_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        log_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame.rowconfigure(3, weight=1)
+
+        self.log_text = tk.Text(log_frame, height=10, width=80, wrap=tk.WORD)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     def update_status(self) -> None:
-        """
-        Update the status display.
-        """
+        """Update the status display."""
         try:
-            # Get system status
             status = self.gate_system.get_system_status()
-            
-            # Update status text
             self.status_text.delete(1.0, tk.END)
             
             status_lines = [
                 f"System Running: {status.get('system_running', 'Unknown')}",
-                f"Security Level: {status.get('security_level', 'Unknown')}",
                 f"Gate State: {status.get('hardware', {}).get('gate_state', 'Unknown')}",
                 f"Lock State: {status.get('hardware', {}).get('lock_state', 'Unknown')}",
                 f"NFC Reader: {'Available' if status.get('nfc_reader_available') else 'Not Available'}",
@@ -1487,127 +1202,94 @@ class GateControlGUI:
                 f"Auto-Close Timer: {'Active' if status.get('auto_close_timer_active') else 'Inactive'}",
                 f"Last Update: {status.get('timestamp', 'Unknown')}"
             ]
-            
             self.status_text.insert(tk.END, "\n".join(status_lines))
-            
-            # Update access log
             self.update_access_log()
-            
         except Exception as e:
             logging.error(f"Error updating GUI status: {e}")
         
-        # Schedule next update
         self.root.after(1000, self.update_status)
 
     def update_access_log(self) -> None:
-        """
-        Update the access log display.
-        """
+        """Update the access log display."""
         try:
-            # Get recent log entries
-            recent_entries = self.gate_system.access_log.get_recent_entries(10)
-            
-            # Update log text
+            recent_entries = self.gate_system.access_log.get_recent_entries(15)
             self.log_text.delete(1.0, tk.END)
             
-            for entry in reversed(recent_entries):  # Show most recent first
-                timestamp = entry.get('timestamp', 'Unknown')
+            for entry in reversed(recent_entries):
+                ts_str = entry.get('timestamp', 'Unknown').split('.')[0].replace('T', ' ')
                 if 'card_uid' in entry:
-                    # Access log entry
-                    card_name = entry.get('card_name', 'Unknown')
-                    granted = entry.get('access_granted', False)
-                    status = "GRANTED" if granted else "DENIED"
-                    reason = entry.get('reason', '')
-                    line = f"{timestamp}: {status} - {card_name} ({reason})\n"
+                    status = "GRANTED" if entry.get('access_granted') else "DENIED"
+                    line = f"[{ts_str}] {status}: {entry.get('card_name')} ({entry.get('reason')})\n"
                 else:
-                    # Event log entry
-                    event_type = entry.get('event_type', 'Unknown')
-                    description = entry.get('description', '')
-                    line = f"{timestamp}: {event_type} - {description}\n"
-                
+                    line = f"[{ts_str}] EVENT: {entry.get('event_type')} - {entry.get('description')}\n"
                 self.log_text.insert(tk.END, line)
-                
         except Exception as e:
             logging.error(f"Error updating access log: {e}")
 
     def open_gate(self) -> None:
-        """
-        Handle open gate button click.
-        """
-        try:
-            result = self.gate_system.manual_open_gate()
-            if result:
-                messagebox.showinfo("Success", "Gate opened successfully")
-            else:
-                messagebox.showerror("Error", "Failed to open gate")
-        except Exception as e:
-            messagebox.showerror("Error", f"Error opening gate: {e}")
+        threading.Thread(target=self._open_gate_thread, daemon=True).start()
+
+    def _open_gate_thread(self):
+        if self.gate_system.manual_open_gate():
+            messagebox.showinfo("Success", "Gate opened successfully.")
+        else:
+            messagebox.showerror("Error", "Failed to open gate.")
 
     def close_gate(self) -> None:
-        """
-        Handle close gate button click.
-        """
-        try:
-            result = self.gate_system.manual_close_gate()
-            if result:
-                messagebox.showinfo("Success", "Gate closed successfully")
-            else:
-                messagebox.showerror("Error", "Failed to close gate")
-        except Exception as e:
-            messagebox.showerror("Error", f"Error closing gate: {e}")
+        threading.Thread(target=self._close_gate_thread, daemon=True).start()
+        
+    def _close_gate_thread(self):
+        if self.gate_system.manual_close_gate():
+            messagebox.showinfo("Success", "Gate closed successfully.")
+        else:
+            messagebox.showerror("Error", "Failed to close gate.")
 
     def emergency_stop(self) -> None:
-        """
-        Handle emergency stop button click.
-        """
-        try:
-            result = messagebox.askyesno("Emergency Stop", "Are you sure you want to activate emergency stop?")
-            if result:
-                self.gate_system.emergency_stop()
-                messagebox.showinfo("Emergency Stop", "Emergency stop activated")
-        except Exception as e:
-            messagebox.showerror("Error", f"Error in emergency stop: {e}")
+        if messagebox.askyesno("Emergency Stop", "Are you sure? This will stop all operations and lock the gate."):
+            self.gate_system.emergency_stop()
+            messagebox.showinfo("Emergency Stop", "Emergency Stop Activated.")
+
+    def on_closing(self):
+        """Handle window close event."""
+        if messagebox.askokcancel("Quit", "Do you want to shut down the gate system?"):
+            self.gate_system.shutdown()
+            self.root.destroy()
 
     def run(self) -> None:
-        """
-        Run the GUI application.
-        """
-        try:
-            self.root.mainloop()
-        except KeyboardInterrupt:
-            logging.info("GUI interrupted by user")
-        finally:
-            self.gate_system.shutdown()
+        """Run the GUI application."""
+        self.root.mainloop()
+
+# Global instance of the system to be accessed by signal handler
+gate_system_instance = None
 
 def signal_handler(signum, frame):
-    """
-    Handle system signals for graceful shutdown.
-    """
-    logging.info(f"Received signal {signum}, shutting down...")
+    """Handle system signals for graceful shutdown."""
+    logging.info(f"Received signal {signum}, initiating shutdown...")
+    if gate_system_instance:
+        gate_system_instance.shutdown()
     sys.exit(0)
 
 def main():
-    """
-    Main function to start the gate control system.
-    """
-    # Set up signal handlers
+    """Main function to start the gate control system."""
+    global gate_system_instance
+    
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
         logging.info("Starting Gate Control System")
+        gate_system_instance = GateControlSystem()
         
-        # Create and start the gate control system
-        gate_system = GateControlSystem()
-        
-        # Create and run the GUI
-        gui = GateControlGUI(gate_system)
+        gui = GateControlGUI(gate_system_instance)
         gui.run()
         
     except Exception as e:
-        logging.error(f"Fatal error in main: {e}")
+        logging.critical(f"A fatal error occurred in main: {e}", exc_info=True)
+        if gate_system_instance:
+            gate_system_instance.shutdown()
         sys.exit(1)
+    finally:
+        logging.info("Application has been shut down.")
 
 if __name__ == "__main__":
     main()
-
