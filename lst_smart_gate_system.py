@@ -1,6 +1,6 @@
 # ===================================================================================
 # Gate Control System for Raspberry Pi - Final Version
-# Version: 7.9 (Correct Sequencing & Auto-Lock)
+# Version: 7.9.1 (Fixed NameError)
 #
 # --- CRITICAL SYSTEM NOTES ---
 # 1. PULL-UP RESISTORS REQUIRED: To prevent LEDs and the Servo from activating
@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from enum import Enum
 import sys
 import signal
+# This line was missing 'Dict'. It has been re-added.
+from typing import Dict, List, Optional, Tuple, Set, Any # <-- FIX IS HERE
 
 # Try to import RPi.GPIO, fallback to mock for testing
 try:
