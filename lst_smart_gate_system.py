@@ -1,6 +1,6 @@
 # ===================================================================================
 # Gate Control System for Raspberry Pi - USER LOGIC REVERSED
-# Version: 7.4
+# Version: 7.5 (Fixed NameError)
 #
 # --- SYSTEM NOTES ---
 # 1. GATE LOGIC REVERSED: Per user request, the "Open" and "Close" commands have
@@ -19,6 +19,7 @@
 import time
 import threading
 import logging
+from logging.handlers import RotatingFileHandler  # <-- FIX: THIS LINE WAS ADDED BACK
 from datetime import datetime, timedelta
 import board
 import busio
