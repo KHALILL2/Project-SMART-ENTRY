@@ -114,7 +114,7 @@ class RPiHardwareController:
             self.servo_pwm = GPIO.PWM(HARDWARE_PINS['SERVO_PIN'], self.config.servo_frequency)
             self.servo_pwm.start(0)  # Start with servo stopped
             
-            GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)  # HIGH = Locked
+            GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Locked (default)
             GPIO.output(HARDWARE_PINS['GREEN_LED_BUZZER_PIN'], GPIO.HIGH)  # HIGH = Off
             GPIO.output(HARDWARE_PINS['RED_LED_BUZZER_PIN'], GPIO.HIGH)  # HIGH = Off
             
@@ -130,9 +130,9 @@ class RPiHardwareController:
             self.gate_state = GateState.MOVING
             
             try:
-                # Step 1: Unlock the relay
-                logging.info("  Step 1: Unlocking relay.")
-                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Unlocked
+                # Step 1: Open/Unlock the lock
+                logging.info("  Step 1: Opening/Unlocking the lock.")
+                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)  # HIGH = Unlocked/Open
                 self.lock_state = LockState.UNLOCKED
                 time.sleep(0.5)  # Wait for lock to physically unlock
                 
@@ -142,24 +142,20 @@ class RPiHardwareController:
                 time.sleep(1.5)  # Wait for servo to reach position
                 self.servo_pwm.ChangeDutyCycle(0)  # Stop servo jitter
                 
-                # Step 3: Wait specified duration, then lock again
-                logging.info(f"  Step 3: Waiting {self.config.lock_unlock_duration}s before locking.")
-                time.sleep(self.config.lock_unlock_duration)
-                
-                # Step 4: Lock the relay again
-                logging.info("  Step 4: Locking relay again.")
-                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)  # HIGH = Locked
+                # Step 3: Close/Lock the lock after servo finishes
+                logging.info("  Step 3: Closing/Locking the lock after servo rotation.")
+                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Locked/Closed
                 self.lock_state = LockState.LOCKED
                 
                 # Final: Update state
                 self.gate_state = GateState.OPEN
-                logging.info("SEQUENCE COMPLETE: Gate is now OPEN (temporarily unlocked).")
+                logging.info("SEQUENCE COMPLETE: Gate is now OPEN, lock operated correctly.")
                 return True
                 
             except Exception as e:
                 logging.error(f"Error during open sequence: {e}")
                 # Ensure we're locked on error
-                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)
+                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Locked
                 self.lock_state = LockState.LOCKED
                 self.gate_state = GateState.ERROR
                 return False
@@ -177,8 +173,8 @@ class RPiHardwareController:
                 time.sleep(1.5)  # Wait for servo to reach position
                 self.servo_pwm.ChangeDutyCycle(0)  # Stop servo jitter
                 
-                # Step 2: Ensure lock is locked (should already be locked)
-                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)  # HIGH = Locked
+                # Step 2: Ensure lock is locked/closed (should already be locked)
+                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Locked/Closed
                 self.lock_state = LockState.LOCKED
                 
                 # Final: Update state
@@ -220,8 +216,11 @@ class RPiHardwareController:
                 self.servo_pwm.stop()
             
             # Ensure everything is off/locked before cleanup
-            for pin in HARDWARE_PINS.values(): 
-                GPIO.output(pin, GPIO.HIGH)
+            for pin_name, pin_num in HARDWARE_PINS.items():
+                if pin_name == 'RELAY_PIN':
+                    GPIO.output(pin_num, GPIO.LOW)  # LOW = Locked
+                else:
+                    GPIO.output(pin_num, GPIO.HIGH)  # HIGH = Off for LEDs
             
             GPIO.cleanup()
             logging.info("GPIO cleanup completed")
