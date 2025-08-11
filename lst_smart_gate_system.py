@@ -1,18 +1,18 @@
 # ===================================================================================
-# Gate Control System for Raspberry Pi - Final Version
-# Version: 8.2 (Corrected GUI NameError)
+# Gate Control System for Raspberry Pi - Definitive Version
+# Version: 9.0 (Correct Sequencing, State-Fix, Auto-Lock)
 #
 # --- CRITICAL SYSTEM NOTES ---
-# 1. PULL-UP RESISTORS REQUIRED: To prevent LEDs and the Servo from activating
-#    at boot, you MUST add a 10kΩ pull-up resistor from a 3.3V pin to EACH
-#    of the following GPIO pins: 18 (Servo), 22 (Green LED), and 27 (Red LED).
+# 1. PULL-UP RESISTORS REQUIRED: This is not optional. To prevent the servo and
+#    LEDs from activating at boot, you MUST add a 10kΩ pull-up resistor from
+#    a 3.3V pin to EACH of these GPIOs: 18 (Servo), 22 (Green LED), 27 (Red LED).
 #
-# 2. CORRECT, SAFE SEQUENCING:
-#    - Open Gate: UNLOCKS FIRST, then moves the servo.
-#    - Close Gate: Moves the servo FIRST, then LOCKS.
+# 2. CORRECT, SAFE SEQUENCING: This version enforces a strict, safe sequence.
+#    - Open Gate: UNLOCKS FIRST, waits, then moves the servo.
+#    - Close Gate: Moves the servo FIRST, waits, then LOCKS.
 #
-# 3. AUTO-LOCK TIMER: After opening, the gate will automatically close and lock
-#    itself after the delay specified in the configuration.
+# 3. "ONLY WORKS ONCE" BUG FIXED: The code no longer blocks commands based on
+#    its assumed state. Pressing a button will always execute the sequence.
 # ===================================================================================
 
 import time
@@ -63,7 +63,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ==============================================================================
 @dataclass
 class HardwareConfig:
-    """ Fine-tune servo travel distance here. Smaller difference = faster movement. """
     servo_frequency: int = 50
     servo_open_duty: float = 7.5  # Duty cycle for the "Open" position
     servo_close_duty: float = 2.5 # Duty cycle for the "Close" position
@@ -103,47 +102,51 @@ class RPiHardwareController:
     def open_gate(self) -> bool:
         """ SAFE ACTION: Unlocks FIRST, then moves the servo. """
         with self.operation_lock:
-            if self.gate_state == GateState.OPEN:
-                logging.info("Gate is already open. No action taken.")
-                return True
-            
-            logging.info("SEQUENCE: OPEN GATE")
+            logging.info("SEQUENCE: OPEN GATE starting.")
             self.gate_state = GateState.MOVING
             
+            # Step 1: Unlock the relay
+            logging.info("  Step 1: Unlocking relay.")
             if not self.unlock_gate():
                 self.gate_state = GateState.ERROR; return False
+            
+            # Step 2: Wait for the physical lock to disengage
             time.sleep(0.5)
 
+            # Step 3: Move the servo motor
+            logging.info("  Step 2: Moving servo to OPEN position.")
             try:
                 self.servo_pwm.ChangeDutyCycle(self.config.servo_open_duty)
                 time.sleep(1.5)
-                self.servo_pwm.ChangeDutyCycle(0)
+                self.servo_pwm.ChangeDutyCycle(0) # Stop servo jitter
             except Exception as e:
                 logging.error(f"Error moving servo: {e}"); self.gate_state = GateState.ERROR; return False
 
+            # Final Step: Update state
             self.gate_state = GateState.OPEN
             logging.info("SEQUENCE COMPLETE: Gate is now OPEN and UNLOCKED."); return True
 
     def close_gate(self) -> bool:
         """ SAFE ACTION: Moves the servo FIRST, then locks. """
         with self.operation_lock:
-            if self.gate_state == GateState.CLOSED:
-                logging.info("Gate is already closed. No action taken.")
-                return True
-                
-            logging.info("SEQUENCE: CLOSE GATE")
+            logging.info("SEQUENCE: CLOSE GATE starting.")
             self.gate_state = GateState.MOVING
 
+            # Step 1: Move the servo motor
+            logging.info("  Step 1: Moving servo to CLOSED position.")
             try:
                 self.servo_pwm.ChangeDutyCycle(self.config.servo_close_duty)
-                time.sleep(1.5)
-                self.servo_pwm.ChangeDutyCycle(0)
+                time.sleep(1.5) # Wait for the gate to physically close
+                self.servo_pwm.ChangeDutyCycle(0) # Stop servo jitter
             except Exception as e:
                 logging.error(f"Error moving servo: {e}"); self.gate_state = GateState.ERROR; return False
             
+            # Step 2: Lock the relay AFTER the gate is closed
+            logging.info("  Step 2: Locking relay.")
             if not self.lock_gate():
                 self.gate_state = GateState.ERROR; return False
 
+            # Final Step: Update state
             self.gate_state = GateState.CLOSED
             logging.info("SEQUENCE COMPLETE: Gate is now CLOSED and LOCKED."); return True
 
@@ -182,14 +185,14 @@ class GateControlSystem:
     
     def manual_open_gate(self):
         """ Handles the manual 'Open Gate' button press and starts auto-lock timer. """
-        logging.info("Manual Open command received.")
+        logging.info("GUI COMMAND: Open Gate received.")
         self.hardware.green_feedback()
         if self.hardware.open_gate():
             self._set_auto_close_timer()
 
     def manual_close_gate(self):
-        """ Handles the manual 'Close Gate / Lock' button press and cancels timer. """
-        logging.info("Manual Close/Lock command received.")
+        """ Handles the manual 'Close Gate' button press and cancels timer. """
+        logging.info("GUI COMMAND: Close Gate received.")
         if self.auto_close_timer and self.auto_close_timer.is_alive():
             self.auto_close_timer.cancel()
             logging.info("Auto-lock timer cancelled by user.")
@@ -232,7 +235,6 @@ class GateControlGUI:
         self.root.columnconfigure(0, weight=1); self.root.rowconfigure(0, weight=1)
         ttk.Label(main_frame, text="Gate Control System", font=("Arial", 16, "bold")).grid(row=0, column=0, columnspan=2, pady=10)
         status_frame = ttk.LabelFrame(main_frame, text="System Status", padding="10"); status_frame.grid(row=1, column=0, sticky="ew"); main_frame.columnconfigure(0, weight=1)
-        # FIX: The typo is corrected here. It is now 'status_frame' not 'status_.frame'
         self.status_text = tk.Text(status_frame, height=5, width=50, wrap=tk.WORD, font=("Courier", 10)); self.status_text.pack(fill=tk.BOTH, expand=True)
         control_frame = ttk.LabelFrame(main_frame, text="Manual Controls", padding="10"); control_frame.grid(row=2, column=0, sticky="ew", pady=10)
         ttk.Button(control_frame, text="Open Gate", command=lambda: threading.Thread(target=self.gate_system.manual_open_gate, daemon=True).start()).pack(side=tk.LEFT, padx=5, pady=5)
