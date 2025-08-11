@@ -1,6 +1,6 @@
 # ===================================================================================
 # Gate Control System for Raspberry Pi - Final Version
-# Version: 8.1 (Fixed GUI NameError)
+# Version: 8.2 (Corrected GUI NameError)
 #
 # --- CRITICAL SYSTEM NOTES ---
 # 1. PULL-UP RESISTORS REQUIRED: To prevent LEDs and the Servo from activating
@@ -232,7 +232,7 @@ class GateControlGUI:
         self.root.columnconfigure(0, weight=1); self.root.rowconfigure(0, weight=1)
         ttk.Label(main_frame, text="Gate Control System", font=("Arial", 16, "bold")).grid(row=0, column=0, columnspan=2, pady=10)
         status_frame = ttk.LabelFrame(main_frame, text="System Status", padding="10"); status_frame.grid(row=1, column=0, sticky="ew"); main_frame.columnconfigure(0, weight=1)
-        # FIX: Changed 'status_.frame' to 'status_frame'
+        # FIX: The typo is corrected here. It is now 'status_frame' not 'status_.frame'
         self.status_text = tk.Text(status_frame, height=5, width=50, wrap=tk.WORD, font=("Courier", 10)); self.status_text.pack(fill=tk.BOTH, expand=True)
         control_frame = ttk.LabelFrame(main_frame, text="Manual Controls", padding="10"); control_frame.grid(row=2, column=0, sticky="ew", pady=10)
         ttk.Button(control_frame, text="Open Gate", command=lambda: threading.Thread(target=self.gate_system.manual_open_gate, daemon=True).start()).pack(side=tk.LEFT, padx=5, pady=5)
