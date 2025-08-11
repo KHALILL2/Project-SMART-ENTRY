@@ -165,8 +165,10 @@ class RPiHardwareController:
                 time.sleep(1.5)  # Wait for servo to reach position
                 self.servo_pwm.ChangeDutyCycle(0)  # Stop servo jitter
                 
-                # Step 3: Close the lock AFTER servo finishes
-                logging.info("  Step 3: Closing the lock after servo finished.")
+                # Step 3: Wait for servo to completely finish, then close the lock
+                logging.info("  Step 3: Waiting for servo to completely finish rotation...")
+                time.sleep(2.5)  # Additional delay to ensure servo completes rotation
+                logging.info("  Step 4: Closing the lock after servo completely finished.")
                 GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Lock Closed
                 self.lock_state = LockState.LOCKED
                 
