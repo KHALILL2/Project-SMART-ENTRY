@@ -124,9 +124,32 @@ class RPiHardwareController:
             raise
 
     def open_gate(self) -> bool:
-        """ OPEN SEQUENCE: Lock opens -> Servo rotates -> Lock closes after servo finishes """
+        """ OPEN SEQUENCE: Simple servo movement only """
         with self.operation_lock:
             logging.info("SEQUENCE: OPEN GATE starting.")
+            self.gate_state = GateState.MOVING
+
+            try:
+                # Step 1: Move servo to OPEN position
+                logging.info("  Step 1: Moving servo to OPEN position.")
+                self.servo_pwm.ChangeDutyCycle(self.config.servo_open_duty)
+                time.sleep(1.5)  # Wait for servo to reach position
+                self.servo_pwm.ChangeDutyCycle(0)  # Stop servo jitter
+                
+                # Final: Update state
+                self.gate_state = GateState.OPEN
+                logging.info("SEQUENCE COMPLETE: Gate OPEN - servo only.")
+                return True
+                
+            except Exception as e:
+                logging.error(f"Error during open sequence: {e}")
+                self.gate_state = GateState.ERROR
+                return False
+
+    def close_gate(self) -> bool:
+        """ CLOSE SEQUENCE: Lock opens -> Servo rotates -> Lock closes after servo finishes """
+        with self.operation_lock:
+            logging.info("SEQUENCE: CLOSE GATE starting.")
             self.gate_state = GateState.MOVING
 
             try:
@@ -136,9 +159,9 @@ class RPiHardwareController:
                 self.lock_state = LockState.UNLOCKED
                 time.sleep(0.2)  # Brief pause for lock to open
                 
-                # Step 2: Move servo to OPEN position WHILE lock is open
-                logging.info("  Step 2: Moving servo to OPEN position.")
-                self.servo_pwm.ChangeDutyCycle(self.config.servo_open_duty)
+                # Step 2: Move servo to CLOSE position WHILE lock is open
+                logging.info("  Step 2: Moving servo to CLOSE position.")
+                self.servo_pwm.ChangeDutyCycle(self.config.servo_close_duty)
                 time.sleep(1.5)  # Wait for servo to reach position
                 self.servo_pwm.ChangeDutyCycle(0)  # Stop servo jitter
                 
@@ -148,42 +171,15 @@ class RPiHardwareController:
                 self.lock_state = LockState.LOCKED
                 
                 # Final: Update state
-                self.gate_state = GateState.OPEN
-                logging.info("SEQUENCE COMPLETE: Gate OPEN - Lock operated correctly.")
-                return True
-                
-            except Exception as e:
-                logging.error(f"Error during open sequence: {e}")
-                # Ensure lock is closed on error
-                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)
-                self.lock_state = LockState.LOCKED
-                self.gate_state = GateState.ERROR
-                return False
-
-    def close_gate(self) -> bool:
-        """ CORRECTED ACTION: Simply moves servo to CLOSE position (lock stays locked). """
-        with self.operation_lock:
-            logging.info("SEQUENCE: CLOSE GATE starting.")
-            self.gate_state = GateState.MOVING
-
-            try:
-                # Step 1: Move servo to CLOSED position
-                logging.info("  Step 1: Moving servo to CLOSED position.")
-                self.servo_pwm.ChangeDutyCycle(self.config.servo_close_duty)
-                time.sleep(1.5)  # Wait for servo to reach position
-                self.servo_pwm.ChangeDutyCycle(0)  # Stop servo jitter
-                
-                # Step 2: Ensure lock is locked/closed (should already be locked)
-                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Locked/Closed
-                self.lock_state = LockState.LOCKED
-                
-                # Final: Update state
                 self.gate_state = GateState.CLOSED
-                logging.info("SEQUENCE COMPLETE: Gate is now CLOSED and LOCKED.")
+                logging.info("SEQUENCE COMPLETE: Gate CLOSED - Lock operated correctly.")
                 return True
                 
             except Exception as e:
                 logging.error(f"Error during close sequence: {e}")
+                # Ensure lock is closed on error
+                GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)
+                self.lock_state = LockState.LOCKED
                 self.gate_state = GateState.ERROR
                 return False
             
