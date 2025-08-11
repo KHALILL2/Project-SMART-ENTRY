@@ -157,7 +157,7 @@ class RPiHardwareController:
                 logging.info("  Step 1: Opening the lock.")
                 GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)  # HIGH = Lock Open
                 self.lock_state = LockState.UNLOCKED
-                time.sleep(0.2)  # Brief pause for lock to open
+                time.sleep(1.2)  # Wait for lock to fully open before servo starts
                 
                 # Step 2: Move servo to CLOSE position WHILE lock is open
                 logging.info("  Step 2: Moving servo to CLOSE position.")
