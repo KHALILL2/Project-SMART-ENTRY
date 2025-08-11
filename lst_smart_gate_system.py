@@ -134,7 +134,6 @@ class RPiHardwareController:
                 logging.info("  Step 1: Opening/Unlocking the lock.")
                 GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.HIGH)  # HIGH = Unlocked/Open
                 self.lock_state = LockState.UNLOCKED
-                time.sleep(0.5)  # Wait for lock to physically unlock
                 
                 # Step 2: Move servo to OPEN position
                 logging.info("  Step 2: Moving servo to OPEN position.")
@@ -142,7 +141,7 @@ class RPiHardwareController:
                 time.sleep(1.5)  # Wait for servo to reach position
                 self.servo_pwm.ChangeDutyCycle(0)  # Stop servo jitter
                 
-                # Step 3: Close/Lock the lock after servo finishes
+                # Step 3: Close/Lock the lock after servo finishes (SAME AS CLOSE COMMAND)
                 logging.info("  Step 3: Closing/Locking the lock after servo rotation.")
                 GPIO.output(HARDWARE_PINS['RELAY_PIN'], GPIO.LOW)  # LOW = Locked/Closed
                 self.lock_state = LockState.LOCKED
