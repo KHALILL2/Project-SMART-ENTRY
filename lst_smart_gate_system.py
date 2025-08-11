@@ -310,12 +310,12 @@ class GateControlGUI:
         control_frame = ttk.LabelFrame(main_frame, text="Manual Controls", padding="10")
         control_frame.grid(row=2, column=0, sticky="ew", pady=10)
         
-        # FIXED: Correct button commands
+        # SWAPPED: Button commands to fix inversion issue
         ttk.Button(
             control_frame, 
             text="Open Gate", 
             command=lambda: threading.Thread(
-                target=self.gate_system.manual_open_gate, 
+                target=self.gate_system.manual_close_gate,  # SWAPPED
                 daemon=True
             ).start()
         ).pack(side=tk.LEFT, padx=5, pady=5)
@@ -324,7 +324,7 @@ class GateControlGUI:
             control_frame, 
             text="Close Gate", 
             command=lambda: threading.Thread(
-                target=self.gate_system.manual_close_gate, 
+                target=self.gate_system.manual_open_gate,  # SWAPPED
                 daemon=True
             ).start()
         ).pack(side=tk.LEFT, padx=5, pady=5)
