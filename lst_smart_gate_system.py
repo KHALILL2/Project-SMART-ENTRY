@@ -1,6 +1,6 @@
 # ===================================================================================
 # Gate Control System for Raspberry Pi - Definitive Version
-# Version: 9.0 (Correct Sequencing, State-Fix, Auto-Lock)
+# Version: 10.0 (Correct Sequencing, State-Fix, Auto-Lock)
 #
 # --- CRITICAL SYSTEM NOTES ---
 # 1. PULL-UP RESISTORS REQUIRED: This is not optional. To prevent the servo and
@@ -113,7 +113,7 @@ class RPiHardwareController:
             # Step 2: Wait for the physical lock to disengage
             time.sleep(0.5)
 
-            # Step 3: Move the servo motor
+            # Step 3: Move the servo motor to the OPEN position
             logging.info("  Step 2: Moving servo to OPEN position.")
             try:
                 self.servo_pwm.ChangeDutyCycle(self.config.servo_open_duty)
@@ -132,7 +132,7 @@ class RPiHardwareController:
             logging.info("SEQUENCE: CLOSE GATE starting.")
             self.gate_state = GateState.MOVING
 
-            # Step 1: Move the servo motor
+            # Step 1: Move the servo motor to the CLOSED position
             logging.info("  Step 1: Moving servo to CLOSED position.")
             try:
                 self.servo_pwm.ChangeDutyCycle(self.config.servo_close_duty)
